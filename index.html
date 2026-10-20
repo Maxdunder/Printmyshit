@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print Files</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd;
+    --accent: #1f7a4d; --accent-text: #ffffff; --code: #efefea;
+    --warn: #b3402e; --ok: #1f7a4d; --busy: #b7791f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --card: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #32322f;
+      --accent: #3fb27a; --accent-text: #0e1a14; --code: #292926;
+      --warn: #e07a66; --ok: #3fb27a; --busy: #e0b04f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 2px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; margin-bottom: 14px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .grow { flex: 1 1 200px; min-width: 0; }
+  .name { font-weight: 600; word-break: break-all; }
+  .meta { color: var(--muted); font-size: .85rem; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .btn { font: inherit; font-size: .9rem; cursor: pointer; text-decoration: none;
+                 border-radius: 8px; padding: 7px 14px; border: 1px solid var(--line);
+                 background: var(--card); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.danger { color: var(--warn); border-color: var(--warn); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .chip { font-size: .8rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
+          color: var(--muted); background: var(--card); }
+  .chip.ok { color: var(--ok); border-color: var(--ok); }
+  .chip.bad { color: var(--warn); border-color: var(--warn); }
+  .state { font-size: 1.3rem; font-weight: 700; }
+  .state.RUNNING, .state.PREPARE { color: var(--busy); }
+  .state.OFFLINE, .state.FAILED { color: var(--warn); }
+  .state.FINISH, .state.IDLE { color: var(--ok); }
+  .bar { height: 8px; background: var(--code); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center;
+          color: var(--muted); margin-bottom: 14px; cursor: pointer; }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  input[type=text], input[type=password] { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
+          border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .msg { min-height: 1.4em; margin: 0 0 14px; font-size: .9rem; color: var(--muted); }
+  .msg.err { color: var(--warn); }
+  small { color: var(--muted); }
+  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Print Files</h1>
+  <p class="sub">Upload a sliced .3mf, pick one, and send it to the printer.</p>
+
+  <div class="chips">
+    <span class="chip" id="chipGh">GitHub: not set</span>
+    <span class="chip" id="chipMqtt">Broker: not set</span>
+    <span class="chip" id="chipEsp">ESP32: unknown</span>
+  </div>
+
+  <p class="msg" id="msg"></p>
+
+  <section class="card" id="printerCard">
+    <h2>Printer</h2>
+    <div class="state" id="pState">No data yet</div>
+    <div class="bar"><div id="pBar"></div></div>
+    <div class="meta" id="pMeta">Waiting for the ESP32 to report.</div>
+    <div class="actions" style="margin-top:12px">
+      <button id="bPause">Pause</button>
+      <button id="bResume">Resume</button>
+      <button id="bStop" class="danger">Stop print</button>
+      <button id="bPoll">Refresh</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Files</h2>
+    <div class="drop" id="drop">Drop a .3mf here, or tap to choose
+      <input type="file" id="file" accept=".3mf,.txt" hidden></div>
+    <div id="files"><p class="meta">Loading…</p></div>
+    <div class="actions" style="margin-top:8px"><button id="bReload">Reload list</button></div>
+  </section>
+
+  <section class="card">
+    <details id="settings">
+      <summary>Settings</summary>
+      <p class="meta">Stored only in this browser. Never put the token or passwords into the repo.</p>
+      <div class="two">
+        <div><label for="owner">GitHub owner</label><input type="text" id="owner" autocomplete="off"></div>
+        <div><label for="repo">Repository</label><input type="text" id="repo" autocomplete="off"></div>
+      </div>
+      <div class="two">
+        <div><label for="branch">Branch</label><input type="text" id="branch" placeholder="main" autocomplete="off"></div>
+        <div><label for="token">GitHub token (contents: read and write)</label><input type="password" id="token" autocomplete="off"></div>
+      </div>
+      <label for="ws">Broker WebSocket URL</label>
+      <input type="text" id="ws" placeholder="wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt" autocomplete="off">
+      <div class="two">
+        <div><label for="muser">Broker username</label><input type="text" id="muser" autocomplete="off"></div>
+        <div><label for="mpass">Broker password</label><input type="password" id="mpass" autocomplete="off"></div>
+      </div>
+      <label for="prefix">Topic prefix (same as in the ESP32 sketch)</label>
+      <input type="text" id="prefix" placeholder="ams-k7f3q92x" autocomplete="off">
+      <div class="actions" style="margin-top:14px">
+        <button class="primary" id="bSave">Save and connect</button>
+        <button id="bForget">Forget settings</button>
+      </div>
+    </details>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+  const $ = s => document.querySelector(s);
+  const FIELDS = ['owner', 'repo', 'branch', 'token', 'ws', 'muser', 'mpass', 'prefix'];
+  let cfg = {};
+  let client = null;
+  let lastStatusAt = 0;
+  let headSha = '';
+
+  // ---------- settings ----------
+  function loadCfg() {
+    try { cfg = JSON.parse(localStorage.getItem('printsite') || '{}'); } catch { cfg = {}; }
+    if (!cfg.owner && location.hostname.endsWith('.github.io')) {
+      cfg.owner = location.hostname.split('.')[0];
+      cfg.repo = location.pathname.split('/')[1] || '';
+    }
+    cfg.branch = cfg.branch || 'main';
+    FIELDS.forEach(k => { $('#' + k).value = cfg[k] || ''; });
+  }
+  function saveCfg() {
+    FIELDS.forEach(k => { cfg[k] = $('#' + k).value.trim(); });
+    cfg.branch = cfg.branch || 'main';
+    try { localStorage.setItem('printsite', JSON.stringify(cfg)); } catch {}
+  }
+
+  // ---------- small helpers ----------
+  const fmt = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+  function say(text, err) { const m = $('#msg'); m.textContent = text || ''; m.className = 'msg' + (err ? ' err' : ''); }
+  function chip(id, text, cls) { const c = $(id); c.textContent = text; c.className = 'chip ' + (cls || ''); }
+  function toB64(buf) {
+    const b = new Uint8Array(buf); let s = '';
+    for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+
+  // ---------- GitHub ----------
+  async function gh(path, opts = {}) {
+    const headers = { Accept: 'application/vnd.github+json' };
+    if (cfg.token) headers.Authorization = 'Bearer ' + cfg.token;
+    const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${path}`,
+      { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+    if (!r.ok) {
+      const e = new Error(`GitHub ${r.status}`); e.status = r.status;
+      try { e.detail = (await r.json()).message; } catch {}
+      throw e;
+    }
+    return r.json();
+  }
+
+  function rawUrl(sha, name) {
+    return `https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${sha}/models/${encodeURIComponent(name)}`;
+  }
+
+  async function loadFiles() {
+    const box = $('#files');
+    if (!cfg.owner || !cfg.repo) { box.innerHTML = '<p class="meta">Set the GitHub owner and repository in Settings.</p>'; chip('#chipGh', 'GitHub: not set'); return; }
+    try {
+      headSha = (await gh('/commits/' + encodeURIComponent(cfg.branch))).sha;
+      let items = [];
+      try { items = await gh('/contents/models?ref=' + headSha); }
+      catch (e) { if (e.status !== 404) throw e; }
+      chip('#chipGh', 'GitHub: ' + cfg.owner + '/' + cfg.repo, 'ok');
+      renderFiles(items.filter(f => f.type === 'file' && /\.(3mf|txt)$/i.test(f.name))
+                       .sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (e) {
+      chip('#chipGh', 'GitHub: error', 'bad');
+      box.innerHTML = '';
+      say('Could not read the repository: ' + (e.detail || e.message), true);
+    }
+  }
+
+  function renderFiles(list) {
+    const box = $('#files');
+    box.innerHTML = '';
+    if (!list.length) { box.innerHTML = '<p class="meta">No files yet. Upload a .3mf above.</p>'; return; }
+    for (const f of list) {
+      const row = document.createElement('div');
+      row.className = 'row'; row.style.padding = '10px 0'; row.style.borderTop = '1px solid var(--line)';
+      row.innerHTML = '<div class="grow"><div class="name"></div><div class="meta"></div></div><div class="actions"></div>';
+      row.querySelector('.name').textContent = f.name;
+      row.querySelector('.meta').textContent = fmt(f.size);
+      const acts = row.querySelector('.actions');
+      const is3mf = /\.3mf$/i.test(f.name);
+      const up = document.createElement('button');
+      up.textContent = 'Upload only'; up.onclick = () => send(f.name, false);
+      acts.appendChild(up);
+      if (is3mf) {
+        const pr = document.createElement('button');
+        pr.className = 'primary'; pr.textContent = 'Upload & print'; pr.onclick = () => send(f.name, true);
+        acts.appendChild(pr);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  async function uploadToGithub(file) {
+    if (!cfg.token) throw new Error('Add a GitHub token in Settings first.');
+    const name = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+    const path = '/contents/models/' + encodeURIComponent(name);
+    const content = toB64(await file.arrayBuffer());
+    let sha;
+    try { sha = (await gh(path + '?ref=' + encodeURIComponent(cfg.branch))).sha; } catch (e) { if (e.status !== 404) throw e; }
+    const body = { message: 'Add ' + name, content, branch: cfg.branch };
+    if (sha) body.sha = sha;
+    await gh(path, { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+    return name;
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    if (!/\.(3mf|txt)$/i.test(file.name)) { say('Only .3mf (or .txt for testing) files.', true); return; }
+    say('Uploading ' + file.name + ' (' + fmt(file.size) + ')…');
+    try {
+      const name = await uploadToGithub(file);
+      say('Uploaded ' + name + '.');
+      await loadFiles();
+    } catch (e) { say('Upload failed: ' + (e.detail || e.message), true); }
+  }
+
+  // ---------- MQTT ----------
+  function setStatusUI(s) {
+    lastStatusAt = Date.now();
+    const state = s.state || 'UNKNOWN';
+    const el = $('#pState'); el.textContent = state; el.className = 'state ' + state;
+    const pct = (s.pct >= 0 && state !== 'OFFLINE') ? s.pct : 0;
+    $('#pBar').style.width = pct + '%';
+    const bits = [];
+    if (s.job) bits.push(s.job);
+    if (s.pct >= 0) bits.push(s.pct + '%');
+    if (s.layer >= 0) bits.push('layer ' + s.layer);
+    if (s.note) bits.push(s.note);
+    $('#pMeta').textContent = bits.join(' · ') || '';
+    if (state === 'OFFLINE') chip('#chipEsp', 'ESP32: offline', 'bad');
+    else chip('#chipEsp', 'ESP32: online', 'ok');
+  }
+
+  function connectMqtt() {
+    if (client) { try { client.end(true); } catch {} client = null; }
+    if (!cfg.ws || !cfg.prefix) { chip('#chipMqtt', 'Broker: not set'); return; }
+    if (typeof mqtt === 'undefined') { chip('#chipMqtt', 'Broker: library failed to load', 'bad'); return; }
+    chip('#chipMqtt', 'Broker: connecting…');
+    client = mqtt.connect(cfg.ws, {
+      username: cfg.muser || undefined, password: cfg.mpass || undefined,
+      clientId: 'web-' + Math.random().toString(16).slice(2, 10), reconnectPeriod: 4000
+    });
+    client.on('connect', () => {
+      chip('#chipMqtt', 'Broker: connected', 'ok');
+      client.subscribe(cfg.prefix + '/status');
+      publish({ action: 'status' });
+    });
+    client.on('close', () => chip('#chipMqtt', 'Broker: disconnected', 'bad'));
+    client.on('error', e => { chip('#chipMqtt', 'Broker: error', 'bad'); say('Broker error: ' + (e && e.message || e), true); });
+    client.on('message', (t, m) => { try { setStatusUI(JSON.parse(m.toString())); } catch {} });
+  }
+
+  function publish(obj) {
+    if (!client || !client.connected) { say('Not connected to the broker.', true); return false; }
+    client.publish(cfg.prefix + '/cmd', JSON.stringify(obj));
+    return true;
+  }
+
+  function send(name, print) {
+    if (!headSha) { say('File list not loaded yet.', true); return; }
+    if (print && !confirm('Start printing ' + name + ' now?\nMake sure the bed is clear and filament is loaded.')) return;
+    if (publish({ action: print ? 'print' : 'upload', name, url: rawUrl(headSha, name) }))
+      say((print ? 'Sent print command for ' : 'Sent upload command for ') + name + '. Watch the status above.');
+  }
+
+  // ---------- wire up ----------
+  $('#bSave').onclick = () => { saveCfg(); say('Saved.'); loadFiles(); connectMqtt(); };
+  $('#bForget').onclick = () => {
+    if (!confirm('Remove all saved settings from this browser?')) return;
+    try { localStorage.removeItem('printsite'); } catch {}
+    cfg = {}; loadCfg(); say('Settings removed.');
+  };
+  $('#bReload').onclick = loadFiles;
+  $('#bPoll').onclick = () => publish({ action: 'status' });
+  $('#bPause').onclick = () => { if (publish({ action: 'pause' })) say('Pause sent.'); };
+  $('#bResume').onclick = () => { if (publish({ action: 'resume' })) say('Resume sent.'); };
+  $('#bStop').onclick = () => { if (confirm('Stop the current print?') && publish({ action: 'stop' })) say('Stop sent.'); };
+
+  const drop = $('#drop'), input = $('#file');
+  drop.onclick = () => input.click();
+  input.onchange = () => { handleFile(input.files[0]); input.value = ''; };
+  ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', ev => handleFile(ev.dataTransfer.files[0]));
+
+  loadCfg();
+  if (!cfg.token || !cfg.ws) $('#settings').open = true;
+  loadFiles();
+  connectMqtt();
+</script>
+</body>
+</html>
