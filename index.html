@@ -191,7 +191,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 
 const $ = s => document.querySelector(s);
 const BED = 256, MAX_TRIS = 1500000, MAX_BANDS = 8;
-const S = { V: null, layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], base: 1,
+const S = { V: null, layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], types: ['', '', '', ''], base: 1,
             changes: [], layer: 1, nLayers: 1, size: [0, 0, 0] };
 
 // ---------- reading models ----------
@@ -406,16 +406,23 @@ function renderList() {
 }
 
 // ---------- UI wiring ----------
+function refreshSlotUI() {
+  document.querySelectorAll('#slotBox .slot').forEach((d, k) => {
+    d.querySelector('input').value = S.slots[k];
+    d.querySelector('span').textContent = 'Slot ' + (k + 1) + (S.types[k] ? ' · ' + S.types[k] : '');
+  });
+}
 function buildSlotUI() {
   const box = $('#slotBox');
   box.innerHTML = '';
   for (let i = 1; i <= 4; i++) {
     const d = document.createElement('label'); d.className = 'slot'; d.style.margin = '0';
-    d.innerHTML = '<input type="color"><span>Slot ' + i + '</span>';
-    const inp = d.querySelector('input'); inp.value = S.slots[i - 1];
+    d.innerHTML = '<input type="color"><span></span>';
+    const inp = d.querySelector('input');
     inp.oninput = () => { S.slots[i - 1] = inp.value; renderList(); applyColors(); };
     box.appendChild(d);
   }
+  refreshSlotUI();
   for (const id of ['#baseSlot', '#chgSlot']) {
     const sel = $(id); sel.innerHTML = '';
     for (let i = 1; i <= 4; i++) { const o = document.createElement('option'); o.value = i; o.textContent = 'Slot ' + i; sel.appendChild(o); }
@@ -477,10 +484,24 @@ window.viewer = {
     }
     return new Blob([b], { type: 'model/stl' });
   },
-  changesParam() {
+  setAms(trays) {
+    // trays: [[type, rrggbb], ...] for AMS slots 1 to 4, as reported by the printer
+    if (!Array.isArray(trays)) return;
+    trays.slice(0, 4).forEach((t, k) => {
+      const type = String((t && t[0]) || '').toUpperCase();
+      const col = String((t && t[1]) || '');
+      S.types[k] = type;
+      if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.slots[k] = '#' + col.toLowerCase();
+    });
+    refreshSlotUI();
+    renderList();
+    applyColors();
+  },
+  changesParam(defaultMaterial) {
     if (!S.changes.length) return '';
     const ch = [...S.changes].sort((a, b) => a.h - b.h).map(c => c.h + ':' + c.slot).join(';');
-    return 'base=' + S.base + ';' + ch + ';slots=' + S.slots.join(',');
+    const types = S.types.map(t => t.replace(/[^A-Za-z0-9+ -]/g, '').slice(0, 12)).join(',');
+    return 'base=' + S.base + ';' + ch + ';slots=' + S.slots.join(',') + ';types=' + types;
   }
 };
 </script>
@@ -686,6 +707,7 @@ window.viewer = {
     if (s.layer >= 0) bits.push('layer ' + s.layer);
     if (s.note) bits.push(s.note);
     $('#pMeta').textContent = bits.join(' · ') || '';
+    if (s.ams && window.viewer) window.viewer.setAms(s.ams);
     if (state === 'OFFLINE') chip('#chipEsp', 'ESP32: offline', 'bad');
     else chip('#chipEsp', 'ESP32: online', 'ok');
   }

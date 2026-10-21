@@ -5,8 +5,10 @@ Inputs come from environment variables:
   MATERIAL  PLA, PETG, ABS or TPU
   LAYER     layer height in mm
   INFILL    infill in percent
-  CHANGES   optional AMS color changes: "base=1;5.2:2;10.4:3;slots=#ff0000,#00ff00,#0000ff,#ffff00"
-            base = AMS slot used first; "height:slot" = from the layer at that height (mm) use that slot
+  CHANGES   optional AMS color changes:
+            "base=1;5.2:2;10.4:3;slots=#ff0000,#00ff00,#0000ff,#ffff00;types=PLA,PETG,,PLA"
+            base = AMS slot used first; "height:slot" = from the layer at that height (mm) use that slot;
+            types = material loaded in each slot (empty = use MATERIAL)
 
 Writes models/<name>_<MATERIAL>.gcode.3mf (or ..._<MATERIAL>_AMS<n>.gcode.3mf when several
 filaments are used), which the printer can start directly.
@@ -43,6 +45,16 @@ PROCESSES = {
     "0.24": "0.24mm Draft @BBL A1",
     "0.28": "0.28mm Extra Draft @BBL A1",
 }
+
+TYPE_ALIAS = {"ASA": "ABS", "PLA+": "PLA", "PLA-CF": "PLA", "PETG-CF": "PETG", "PETG-HF": "PETG",
+              "TPU 95A": "TPU", "TPU95A": "TPU"}
+
+
+def material_for(slot_type):
+    """Map an AMS tray type (as the printer reports it) to one of the materials we have profiles for."""
+    t = (slot_type or "").upper().strip()
+    t = TYPE_ALIAS.get(t, t)
+    return t if t in FILAMENTS else MATERIAL
 
 
 def die(msg):
@@ -144,13 +156,18 @@ def threemf_to_stl(src, dst):
 
 # ---- color changes ------------------------------------------------------------------
 def parse_changes(text):
-    """Returns (base_slot, [(height_mm, slot)], [slot colors])."""
+    """Returns (base_slot, [(height_mm, slot)], [slot colors], [slot types])."""
     base, changes, colors = 1, [], ["#e53935", "#1e88e5", "#43a047", "#fdd835"]
+    types = ["", "", "", ""]
     for part in [p.strip() for p in text.split(";") if p.strip()]:
         if part.startswith("base="):
             base = int(part[5:])
         elif part.startswith("slots="):
             colors = part[6:].split(",")
+        elif part.startswith("types="):
+            types = (part[6:].split(",") + ["", "", "", ""])[:4]
+            if not all(re.fullmatch(r"[A-Za-z0-9+ -]{0,12}", t) for t in types):
+                die(f"bad slot types: {types}")
         else:
             m = re.fullmatch(r"(\d{1,3}(?:\.\d{1,3})?):([1-4])", part)
             if not m:
@@ -162,7 +179,7 @@ def parse_changes(text):
         die(f"bad slot colors: {colors}")
     if len(changes) > 30:
         die("too many color changes (max 30)")
-    return base, sorted(changes), [c.lower() for c in colors]
+    return base, sorted(changes), [c.lower() for c in colors], types
 
 
 def layer_zs(first, height, top):
@@ -267,18 +284,21 @@ def build_3mf(tris, dst, changes, colors, slots, variant, zs, with_settings, set
             z.writestr("Metadata/project_settings.config", json.dumps(settings, indent=2))
 
 
-def merged_project_settings(machine, process, filament, slots, colors):
-    """One project config: machine + process + per-filament lists repeated for every filament."""
+def merged_project_settings(machine, process, filaments, slots, colors):
+    """One project config: machine + process + one entry per filament in every per-filament list."""
     cfg = {}
     cfg.update(machine)
     cfg.update(process)
-    n = len(slots)
-    for key, val in filament.items():
-        if isinstance(val, list) and len(val) == 1:
-            cfg[key] = [val[0]] * n
+    keys = set()
+    for f in filaments:
+        keys.update(f.keys())
+    for key in keys:
+        vals = [f.get(key) for f in filaments]
+        if all(isinstance(v, list) and len(v) == 1 for v in vals):
+            cfg[key] = [v[0] for v in vals]
         elif key not in cfg:
-            cfg[key] = val
-    cfg["filament_colour"] = [colors[s - 1] for s in slots]
+            cfg[key] = vals[0]
+    cfg["filament_colour"] = [colors[sl - 1] for sl in slots]
     cfg["from"] = "project"
     cfg["name"] = "project_settings"
     return cfg
@@ -397,6 +417,14 @@ def main():
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
 
+    base_slot, raw_changes, colors, types = parse_changes(CHANGES) if CHANGES else (1, [], [], ["", "", "", ""])
+    if CHANGES:
+        used_slots = {base_slot} | {sl for _, sl in raw_changes}
+        used_materials = {material_for(types[sl - 1]) for sl in used_slots}
+    else:
+        used_materials = {MATERIAL}
+    print("materials in this print:", sorted(used_materials))
+
     machine = flatten(pick([MACHINE], index, "printer"), index)
     machine["printer_settings_id"] = machine["name"]
 
@@ -407,7 +435,7 @@ def main():
     # smaller G-code means a faster upload to the printer
     process["enable_arc_fitting"] = "1"
     process["resolution"] = "0.05"
-    if MATERIAL == "ABS":
+    if "ABS" in used_materials:
         # no enclosure on the A1: a wide brim keeps the corners from lifting
         process["brim_type"] = "outer_only"
         process["brim_width"] = "8"
@@ -420,9 +448,9 @@ def main():
     print("process :", process["name"], f"(layer {LAYER}, infill {INFILL}%)")
     print("filament:", filament["name"])
 
-    def write_profiles(compat, origin, tag="", colour=None):
+    def write_profiles(compat, origin, tag="", colour=None, fil=None):
         paths = {}
-        for kind, base_data in (("machine", machine), ("process", process), ("filament", filament)):
+        for kind, base_data in (("machine", machine), ("process", process), ("filament", fil or filament)):
             data = json.loads(json.dumps(base_data))
             data["from"] = origin
             if kind != "machine":
@@ -469,7 +497,6 @@ def main():
         return
 
     # ---- several filaments: build a project with a filament change at each chosen layer ----
-    base_slot, raw_changes, colors = parse_changes(CHANGES)
     first = float(process.get("initial_layer_print_height", LAYER) or LAYER)
     tris = read_stl(stl_path)
     top = max(p[2] for t in tris for p in t) - min(p[2] for t in tris for p in t)
@@ -489,12 +516,20 @@ def main():
         return
 
     compat, origin = working
-    fpaths = [write_profiles(compat, origin, tag=f"_{i}", colour=colors[i - 1])["filament"] for i in range(1, n_fil + 1)]
+    slot_filaments = []
+    for i in range(1, n_fil + 1):
+        mat = material_for(types[i - 1])
+        slot_filaments.append(flatten(pick(FILAMENTS[mat], index, "filament"), index))
+        print(f"slot {i}: {types[i - 1] or '(not reported)'} -> {slot_filaments[-1]['name']}")
+    fpaths = [write_profiles(compat, origin, tag=f"_{i}", colour=colors[i - 1], fil=slot_filaments[i - 1])["filament"]
+              for i in range(1, n_fil + 1)]
     ppaths = write_profiles(compat, origin)
     settings_arg = f"{ppaths['machine']};{ppaths['process']}"
     filament_arg = ";".join(fpaths)
     slot_list = list(range(1, n_fil + 1))
-    project = merged_project_settings(machine, process, filament, slot_list, colors)
+    for f in slot_filaments:
+        f["filament_settings_id"] = [f["name"]]
+    project = merged_project_settings(machine, process, slot_filaments, slot_list, colors)
 
     variants = [
         (2, "tool_change", "MultiAsSingle"),

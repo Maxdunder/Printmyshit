@@ -67,6 +67,21 @@ The chips at the top turn green. The printer card shows the live state.
 4. After 1 to 3 minutes the sliced file `name_MATERIAL.gcode.3mf` appears in **Files** and the original model is removed from `incoming/`.
 5. Press **Upload & print**.
 
+### Preview and AMS color changes
+
+After you pick a model, a 3D preview appears. Drag to rotate the view. The buttons turn the model 90 degrees or scale it.
+
+- The **Layer** slider cuts the model at a layer so you can see the inside.
+- The four **AMS slot colors** and materials are read from your printer through the ESP32, so they match what is loaded
+  (for example "Slot 2 · PETG"). They update on their own when you change a spool. You can still pick a color by hand.
+  The slicer uses each slot's material profile, so a PLA and a PETG slot get their own temperatures.
+- Choose the **First filament** slot. Then move the slider to a layer, pick the slot to **Change to**, and press **At this layer**.
+  Repeat for more changes. Each one is listed with a **Remove** button.
+- When you slice, the file is named `name_MATERIAL_AMS3.gcode.3mf` (the number is how many slots it uses), and
+  **Upload & print** starts it with the AMS: filament 1 is slot 1, filament 2 is slot 2, and so on.
+
+Changing the layer height clears the color changes, because they were placed for the old layer height.
+
 If the job fails, the page shows a link to the log. Copy the log text if you need help.
 
 In the repo, go to Settings > Actions > General and make sure Actions are allowed. The job needs no other setup.
