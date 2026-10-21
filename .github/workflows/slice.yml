@@ -1,4 +1,4 @@
-name: Slice
+name: Slice (v2)
 
 on:
   workflow_dispatch:
@@ -45,9 +45,10 @@ jobs:
           sudo apt-get install -y xvfb libgtk-3-0 libwebkit2gtk-4.1-0 libglu1-mesa libegl1 libgl1 libosmesa6
 
       - name: Download OrcaSlicer
+        # v2: skips the ARM build
         run: |
-          url=$(gh api repos/SoftFever/OrcaSlicer/releases/latest \
-            --jq '[.assets[].browser_download_url | select(test("AppImage$"))] | (map(select(test("Ubuntu2404"))) + .)[0]')
+          url=$(gh api repos/OrcaSlicer/OrcaSlicer/releases/latest \
+            --jq '[.assets[].browser_download_url | select(test("AppImage$")) | select(test("aarch64") | not)] | (map(select(test("Ubuntu2404"))) + .)[0]')
           echo "Using $url"
           curl -fsSL "$url" -o orca.AppImage
           chmod +x orca.AppImage
