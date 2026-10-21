@@ -45,32 +45,21 @@ jobs:
           sudo apt-get install -y xvfb libgtk-3-0 libwebkit2gtk-4.1-0 libglu1-mesa libegl1 libgl1 libosmesa6
       - name: Download OrcaSlicer
         run: |
-          arch="$(uname -m)"
-          case "$arch" in
-            x86_64)
-              pattern="x86_64"
-              ;;
-            arm64|aarch64)
-              pattern="aarch64"
-              ;;
-            *)
-              echo "Unsupported architecture: $arch"
-              exit 1
-              ;;
-          esac
-
           url=$(gh api repos/SoftFever/OrcaSlicer/releases/latest \
-            --jq --arg pattern "$pattern" '.assets[].browser_download_url | select(test("AppImage$")) | select(test("Ubuntu2404")) | select(test($pattern))' | head -n 1)
+            --jq '.assets[].browser_download_url
+              | select(test("AppImage$"))
+              | select(test("Ubuntu2404"))
+              | select(test("x86_64|x86-64|amd64"))
+            ' | head -n 1)
 
           if [ -z "$url" ]; then
-            echo "No OrcaSlicer AppImage found for architecture $arch"
+            echo "No x86_64 Linux AppImage found for OrcaSlicer"
             exit 1
           fi
 
           echo "Using $url"
           curl -fsSL "$url" -o orca.AppImage
           chmod +x orca.AppImage
-          file ./orca.AppImage
           ./orca.AppImage --appimage-extract > /dev/null
           ls squashfs-root | head -30
  
