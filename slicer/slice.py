@@ -1,5 +1,5 @@
 name: Slice
-
+ 
 on:
   workflow_dispatch:
     inputs:
@@ -18,14 +18,14 @@ on:
         description: "Infill in percent"
         required: true
         default: "15"
-
+ 
 permissions:
   contents: write
-
+ 
 concurrency:
   group: slice
   cancel-in-progress: false
-
+ 
 jobs:
   slice:
     runs-on: ubuntu-24.04
@@ -38,12 +38,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-
+ 
       - name: Install system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libwebkit2gtk-4.1-0 libglu1-mesa libegl1 libgl1 libosmesa6
-
+ 
       - name: Download OrcaSlicer
         run: |
           url=$(gh api repos/OrcaSlicer/OrcaSlicer/releases/latest \
@@ -53,10 +53,10 @@ jobs:
           chmod +x orca.AppImage
           ./orca.AppImage --appimage-extract > /dev/null
           ls squashfs-root | head -30
-
+ 
       - name: Slice
         run: python3 slicer/slice.py
-
+ 
       - name: Commit the sliced file
         run: |
           git config user.name "github-actions"
