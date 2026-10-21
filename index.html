@@ -124,7 +124,9 @@
   .warn { color: var(--warn); }
   .prow { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: .88rem; }
   .prow .sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); flex: none; }
-  .prow select { width: 138px; flex: none; padding: 6px 8px; }
+  .prow select { width: 84px; flex: none; padding: 6px 6px; }
+  .prow select.ps { width: 112px; }
+  select.mat { padding: 4px 4px; font-size: .74rem; border-radius: 8px; }
   #secProj[hidden], #secChanges[hidden] { display: none; }
   .cta { display: flex; gap: 10px; flex-wrap: wrap; }
   .sprog { height: 6px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; margin-top: 12px; display: none; }
@@ -295,6 +297,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 const $ = s => document.querySelector(s);
 const BED = 256, MAX_TRIS = 1500000, MAX_BANDS = 8;
 const S = { V: null, F: null, proj: false, file: null, used: [], map: {}, mapTouched: false, fcol: [], ftype: [], layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], types: ['', '', '', ''], base: 1,
+            tlock: [false, false, false, false], fover: {},
             amsSlots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], amsTypes: ['', '', '', ''], locked: [false, false, false, false],
             changes: [], layer: 1, nLayers: 1, size: [0, 0, 0] };
 
@@ -617,17 +620,32 @@ function renderList() {
 function refreshSlotUI() {
   document.querySelectorAll('#slotBox .slot').forEach((d, k) => {
     d.querySelector('input').value = S.slots[k];
-    d.querySelector('span').textContent = 'Slot ' + (k + 1) + (S.types[k] ? ' · ' + S.types[k] : '');
+    d.querySelector('span').textContent = 'Slot ' + (k + 1);
+    const sel = d.querySelector('select');
+    if (S.types[k] && ![...sel.options].some(o => o.value === S.types[k])) {
+      const o = document.createElement('option'); o.value = o.textContent = S.types[k]; sel.appendChild(o);
+    }
+    sel.value = S.types[k] || '';
   });
+}
+function syncMaterial() {          // the Material box follows the first filament's slot
+  const t = (S.types[S.base - 1] || '').toUpperCase().replace(/^ASA$/, 'ABS');
+  const o = [...$('#material').options].find(x => x.value === t);
+  if (o) $('#material').value = o.value;
 }
 function buildSlotUI() {
   const box = $('#slotBox');
   box.innerHTML = '';
   for (let i = 1; i <= 4; i++) {
-    const d = document.createElement('label'); d.className = 'slot'; d.style.margin = '0';
-    d.innerHTML = '<input type="color"><span></span>';
+    const d = document.createElement('div'); d.className = 'slot';
+    d.innerHTML = '<input type="color"><span></span><select class="mat" title="Material of this slot">' +
+      ['', 'PLA', 'PETG', 'ABS', 'ASA', 'TPU'].map(m => '<option value="' + m + '">' + (m || 'Auto') + '</option>').join('') + '</select>';
     const inp = d.querySelector('input');
     inp.oninput = () => { S.slots[i - 1] = inp.value; renderList(); applyColors(); };
+    d.querySelector('select').onchange = e => {
+      S.types[i - 1] = e.target.value; S.tlock[i - 1] = true; S.amsTypes[i - 1] = S.amsTypes[i - 1];
+      if (i === S.base) syncMaterial();
+    };
     box.appendChild(d);
   }
   refreshSlotUI();
@@ -638,7 +656,8 @@ function buildSlotUI() {
   $('#chgSlot').value = '2';
 }
 buildSlotUI();
-$('#baseSlot').onchange = () => { S.base = +$('#baseSlot').value; applyColors(); };
+$('#baseSlot').onchange = () => { S.base = +$('#baseSlot').value; syncMaterial(); applyColors(); };
+$('#material').onchange = () => { if (!S.proj) { S.types[S.base - 1] = $('#material').value; S.tlock[S.base - 1] = true; refreshSlotUI(); } };
 $('#layerSlider').oninput = () => { S.layer = +$('#layerSlider').value; applyLayer(); };
 $('#addChange').onclick = () => {
   if (S.layer <= 1) { $('#sstat').textContent = 'Move the layer slider above the first layer, then add the change.'; return; }
@@ -679,10 +698,17 @@ function setProjUI() {
   const box = $('#projList'); box.innerHTML = '';
   for (const f of S.used) {
     const row = document.createElement('div'); row.className = 'prow';
-    row.innerHTML = '<span class="sw"></span><span class="grow"></span><select></select><span class="sw sl"></span>';
+    row.innerHTML = '<span class="sw"></span><span class="grow"></span><select class="pm"></select><select class="ps"></select><span class="sw sl"></span>';
     row.querySelector('.sw').style.background = S.fcol[f - 1];
-    row.querySelector('.grow').textContent = 'Filament ' + f + (S.ftype[f - 1] ? ' · ' + S.ftype[f - 1] : '');
-    const sel = row.querySelector('select');
+    row.querySelector('.grow').textContent = 'Filament ' + f;
+    const pm = row.querySelector('.pm');
+    const ft = (S.ftype[f - 1] || '').toUpperCase();
+    ['PLA', 'PETG', 'ABS', 'ASA', 'TPU'].concat(ft && !['PLA', 'PETG', 'ABS', 'ASA', 'TPU'].includes(ft) ? [ft] : []).forEach(m => {
+      const o = document.createElement('option'); o.value = m; o.textContent = m; pm.appendChild(o);
+    });
+    pm.value = S.fover[f] || ft || 'PLA';
+    pm.onchange = () => { if (pm.value === ft) delete S.fover[f]; else S.fover[f] = pm.value; };
+    const sel = row.querySelector('.ps');
     for (let k = 1; k <= 4; k++) {
       const o = document.createElement('option'); o.value = k;
       o.textContent = 'Slot ' + k + (S.amsTypes[k - 1] ? ' · ' + S.amsTypes[k - 1] : '');
@@ -716,7 +742,7 @@ window.viewer = {
     $('#emptyOverlay').hidden = true; $('#vtools').hidden = false; $('#changeFile').hidden = false;
     S.V = V;
     S.changes = []; S.layer = 1e9; S.base = 1; $('#baseSlot').value = '1';
-    S.slots = S.amsSlots.slice(); S.types = S.amsTypes.slice(); S.locked = [false, false, false, false];
+    S.slots = S.amsSlots.slice(); S.types = S.amsTypes.slice(); S.locked = [false, false, false, false]; S.tlock = [false, false, false, false]; S.fover = {};
     const info = [];
     if (meta) {
       const hasCol = meta.colors.some(c => c);
@@ -796,7 +822,7 @@ window.viewer = {
       S.amsTypes[k] = type;
       if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.amsSlots[k] = '#' + col.toLowerCase();
       if (S.locked[k]) return;
-      S.types[k] = type;
+      if (!S.tlock[k]) S.types[k] = type;
       if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.slots[k] = '#' + col.toLowerCase();
     });
     if (S.proj && !S.mapTouched) autoMap();
@@ -806,6 +832,10 @@ window.viewer = {
     applyColors();
   },
   changesParam(defaultMaterial) {
+    if (S.proj) {
+      const o = Object.keys(S.fover).map(f => f + ':' + S.fover[f].replace(/[^A-Za-z0-9+ -]/g, '').slice(0, 12));
+      return 'project' + (o.length ? ';types=' + o.join(',') : '');
+    }
     if (!S.changes.length) return '';
     const ch = [...S.changes].sort((a, b) => a.h - b.h).map(c => c.h + ':' + c.slot).join(';');
     const types = S.types.map(t => t.replace(/[^A-Za-z0-9+ -]/g, '').slice(0, 12)).join(',');
@@ -1003,7 +1033,7 @@ window.viewer = {
         headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + cfg.token, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: cfg.branch, inputs: {
           model: 'incoming/' + name, material: $('#material').value, layer: $('#layer').value,
-          infill: String(infill), changes: proj ? 'project' : window.viewer.changesParam() } })
+          infill: String(infill), changes: window.viewer.changesParam() } })
       });
       if (r.status !== 204) {
         let d = ''; try { d = (await r.json()).message; } catch {}

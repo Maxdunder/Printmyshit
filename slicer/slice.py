@@ -417,6 +417,19 @@ def run_project():
     base = re.sub(r"\.(stl|3mf)$", "", Path(MODEL).name, flags=re.I)[:40]
     final = f"{base}_{MATERIAL}_PROJ.gcode.3mf"
     src = work / "project.3mf"
+    overrides = {}   # file filament number -> material chosen on the page
+    for part in CHANGES.split(";"):
+        if part.startswith("types="):
+            for item in part[6:].split(","):
+                m = re.fullmatch(r"(\d{1,2}):([A-Za-z0-9+ -]{1,12})", item.strip())
+                if m:
+                    overrides[int(m.group(1))] = material_for(m.group(2))
+    ovr_profiles = {}
+    if overrides:
+        index = build_index(find_profiles())
+        for i, mat in overrides.items():
+            ovr_profiles[i] = flatten(pick(FILAMENTS[mat], index, "filament"), index)
+            print(f"filament {i} -> {mat}: {ovr_profiles[i]['name']}")
     fixes = {}      # parameter -> value forced because the slicer rejected the stored one
 
     def build_src():
@@ -432,6 +445,14 @@ def run_project():
                     zcfg["sparse_infill_density"] = f"{int(float(INFILL))}%"
                     if layer_changed:
                         zcfg["layer_height"] = str(LAYER)
+                    skip = {"filament_colour", "default_filament_colour", "filament_ids", "filament_vendor"}
+                    for i, prof in ovr_profiles.items():
+                        for k, v in prof.items():
+                            if k in skip or not isinstance(v, list) or not v:
+                                continue
+                            cur = zcfg.get(k)
+                            if isinstance(cur, list) and len(cur) >= i:
+                                cur[i - 1] = v[0]
                     for k, v in fixes.items():
                         zcfg[k] = v
                     data = _json.dumps(zcfg, indent=4).encode()
