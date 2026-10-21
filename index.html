@@ -122,6 +122,10 @@
   .chg .sw { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--line); flex: none; }
   .chg .grow { flex: 1; }
   .warn { color: var(--warn); }
+  .prow { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: .88rem; }
+  .prow .sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); flex: none; }
+  .prow select { width: 138px; flex: none; padding: 6px 8px; }
+  #secProj[hidden], #secChanges[hidden] { display: none; }
   .cta { display: flex; gap: 10px; flex-wrap: wrap; }
   .sprog { height: 6px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; margin-top: 12px; display: none; }
   .sprog.on { display: block; }
@@ -211,7 +215,14 @@
         <div class="slots" id="slotBox"></div>
       </div>
 
-      <div class="sect needmodel">
+      <div class="sect needmodel" id="secProj" hidden>
+        <h2>Filaments in this file</h2>
+        <p class="meta" style="margin:-4px 0 8px">Choose which AMS slot each filament of the file is printed from.</p>
+        <div id="projList"></div>
+        <p class="meta" id="projNote"></p>
+      </div>
+
+      <div class="sect needmodel" id="secChanges">
         <h2>Color changes</h2>
         <div class="two">
           <div><label for="baseSlot">Start with</label><select id="baseSlot"></select></div>
@@ -283,7 +294,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 
 const $ = s => document.querySelector(s);
 const BED = 256, MAX_TRIS = 1500000, MAX_BANDS = 8;
-const S = { V: null, layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], types: ['', '', '', ''], base: 1,
+const S = { V: null, F: null, proj: false, file: null, used: [], map: {}, mapTouched: false, fcol: [], ftype: [], layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], types: ['', '', '', ''], base: 1,
             amsSlots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], amsTypes: ['', '', '', ''], locked: [false, false, false, false],
             changes: [], layer: 1, nLayers: 1, size: [0, 0, 0] };
 
@@ -302,50 +313,90 @@ const comp = (a, b) => {   // a first, then b
   return out;
 };
 
+const attrsOf = str => { const o = {}; for (const m of str.matchAll(/([\w:.-]+)="([^"]*)"/g)) o[m[1]] = m[2]; return o; };
+
+// Bambu/Orca store painted colors per triangle as a hex string read from its end (4 bits per step).
+function decodePaint(str, acc) {
+  let i = str.length - 1;
+  const nib = () => { if (i < 0) return 0; const c = parseInt(str[i--], 16); return c >= 0 ? c : 0; };
+  const walk = (w, depth) => {
+    const code = nib(), sp = code & 3;
+    if (sp === 0) { let st = code >> 2; if (st === 3) st = nib() + 3; acc[st] = (acc[st] || 0) + w; }
+    else if (depth < 12) { const n = sp + 1; for (let k = 0; k < n; k++) walk(w / n, depth + 1); }
+    else acc[0] = (acc[0] || 0) + w;
+  };
+  walk(1, 0);
+}
+
 function parse3mf(buf) {
   const files = unzipSync(new Uint8Array(buf));
-  const NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
-  const PNS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+  const meta = readMeta(files);
   const cache = {};
   const model = path => {
     path = path.replace(/^\//, '');
     if (!cache[path]) {
       if (!files[path]) throw new Error('missing ' + path + ' in the 3mf');
-      const doc = new DOMParser().parseFromString(strFromU8(files[path]), 'application/xml');
+      const t = strFromU8(files[path]);
       const objs = {};
-      for (const o of doc.getElementsByTagNameNS(NS, 'object')) objs[o.getAttribute('id')] = o;
-      cache[path] = { objs, doc };
+      for (const m of t.matchAll(/<object\b([^>]*)>([\s\S]*?)<\/object>/g)) objs[attrsOf(m[1]).id] = m[2];
+      cache[path] = { t, objs };
     }
     return cache[path];
   };
-  const out = [];
-  const emit = (path, id, m) => {
-    const o = model(path).objs[id];
-    const mesh = o.getElementsByTagNameNS(NS, 'mesh')[0];
-    if (mesh) {
-      const vs = [...mesh.getElementsByTagNameNS(NS, 'vertex')]
-        .map(v => ap(m, +v.getAttribute('x'), +v.getAttribute('y'), +v.getAttribute('z')));
-      for (const t of mesh.getElementsByTagNameNS(NS, 'triangle'))
-        for (const k of ['v1', 'v2', 'v3']) { const p = vs[+t.getAttribute(k)]; out.push(p[0], p[1], p[2]); }
+  const out = [], fil = [], usedSet = new Set();
+  let painted = false;
+  const addTri = (vs, i1, i2, i3, extra, ext) => {
+    const p1 = vs[i1], p2 = vs[i2], p3 = vs[i3];
+    if (!p1 || !p2 || !p3) return;
+    out.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+    let dom = ext;
+    if (extra && extra.length > 8) {
+      const pm = extra.match(/(?:paint_color|mmu_segmentation)="([0-9A-Fa-f]+)"/);
+      if (pm) {
+        const acc = {}; decodePaint(pm[1], acc);
+        let best = -1, bw = -1;
+        for (const k in acc) { usedSet.add(+k || ext); if (acc[k] > bw) { bw = acc[k]; best = +k; } }
+        dom = best > 0 ? best : ext; painted = true;
+        fil.push(dom); return;
+      }
     }
-    for (const c of o.getElementsByTagNameNS(NS, 'component')) {
-      const sub = c.getAttributeNS(PNS, 'path') || c.getAttribute('p:path') || path;
-      emit(sub, c.getAttribute('objectid'), comp(mt(c.getAttribute('transform')), m));
+    usedSet.add(ext); fil.push(dom);
+  };
+  const meshOut = (body, m, ext) => {
+    const vs = [];
+    let any = false;
+    for (const v of body.matchAll(/<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"/g)) { any = true; vs.push(ap(m, +v[1], +v[2], +v[3])); }
+    if (!any) for (const v of body.matchAll(/<vertex\b([^>]*?)\/?>/g)) { const a = attrsOf(v[1]); vs.push(ap(m, +a.x, +a.y, +a.z)); }
+    let any2 = false;
+    for (const t of body.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"([^>]*?)\/?>/g)) { any2 = true; addTri(vs, +t[1], +t[2], +t[3], t[4], ext); }
+    if (!any2) for (const t of body.matchAll(/<triangle\b([^>]*?)\/?>/g)) { const a = attrsOf(t[1]); addTri(vs, +a.v1, +a.v2, +a.v3, t[1], ext); }
+  };
+  const emit = (path, id, m, itemId, ext) => {
+    const body = model(path).objs[id];
+    if (body === undefined) return;
+    if (body.includes('<mesh')) meshOut(body, m, ext);
+    for (const c of body.matchAll(/<component\b([^>]*?)\/?>/g)) {
+      const a = attrsOf(c[1]);
+      const pe = (meta.partExt[itemId] || {})[a.objectid] || ext;
+      emit(a['p:path'] || path, a.objectid, comp(mt(a.transform), m), itemId, pe);
     }
   };
   const main = '3D/3dmodel.model';
-  const { doc } = model(main);
-  const build = doc.getElementsByTagNameNS(NS, 'build')[0];
-  for (const item of build.getElementsByTagNameNS(NS, 'item'))
-    emit(item.getAttributeNS(PNS, 'path') || item.getAttribute('p:path') || main, item.getAttribute('objectid'), mt(item.getAttribute('transform')));
+  const bt = (model(main).t.match(/<build\b[\s\S]*?<\/build>/) || [''])[0];
+  for (const it of bt.matchAll(/<item\b([^>]*?)\/?>/g)) {
+    const a = attrsOf(it[1]);
+    emit(a['p:path'] || main, a.objectid, mt(a.transform), a.objectid, meta.objExt[a.objectid] || 1);
+  }
   if (!out.length) throw new Error('no triangles found in the 3mf');
-  return { V: new Float32Array(out), meta: readMeta(files) };
+  meta.used = [...usedSet].filter(v => v >= 1 && v <= 16).sort((x, y) => x - y);
+  meta.painted = painted;
+  return { V: new Float32Array(out), F: new Uint8Array(fil), meta };
 }
 
 // Colors and settings stored by Bambu Studio / OrcaSlicer inside the 3mf
 function readMeta(files) {
   const txt = n => files[n] ? strFromU8(files[n]) : '';
-  const meta = { colors: [], types: [], base: 1, changes: [], layerH: 0, infill: -1, warn: [] };
+  const meta = { colors: [], types: [], base: 1, changes: [], layerH: 0, infill: -1, warn: [], objExt: {}, partExt: {}, used: [], painted: false };
   let ps = null;
   try { ps = JSON.parse(txt('Metadata/project_settings.config') || 'null'); } catch {}
   const arr = v => Array.isArray(v) ? v : (v == null ? [] : [v]);
@@ -358,15 +409,15 @@ function readMeta(files) {
   }
   const ms = txt('Metadata/model_settings.config');
   if (ms) {
-    const ex = [...ms.matchAll(/key="extruder"\s+value="(\d+)"/g)].map(m => +m[1]);
-    if (ex.length) {
-      meta.base = ex[0] || 1;
-      if (new Set(ex).size > 1) meta.warn.push('objects or parts use different filaments (only layer color changes are sliced)');
+    const md = new DOMParser().parseFromString(ms, 'application/xml');
+    const extOf = el => { let e = 0; for (const c of el.children) if (c.tagName === 'metadata' && c.getAttribute('key') === 'extruder') e = +c.getAttribute('value') || 0; return e; };
+    let first = true;
+    for (const o of md.getElementsByTagName('object')) {
+      const id = o.getAttribute('id'), ext = extOf(o) || 1;
+      meta.objExt[id] = ext; meta.partExt[id] = {};
+      if (first) { meta.base = ext; first = false; }
+      for (const pt of o.getElementsByTagName('part')) { const pe = extOf(pt); if (pe) meta.partExt[id][pt.getAttribute('id')] = pe; }
     }
-  }
-  for (const n of Object.keys(files)) {
-    if (/^3D\/.*\.model$/.test(n) && /paint_color=|mmu_segmentation=/.test(strFromU8(files[n]).slice(0, 4e6)))
-      { meta.warn.push('the model has painted colors, which the online slicer cannot use (only layer color changes)'); break; }
   }
   const cg = txt('Metadata/custom_gcode_per_layer.xml');
   if (cg) {
@@ -386,6 +437,7 @@ function readMeta(files) {
       let slot = 0;
       if (l.type === 2 && l.ext) slot = l.ext;
       else if (l.type === 0 && /^#[0-9a-f]{6}/.test(l.col)) slot = near(l.col);
+      if (l.type === 1) meta.warn.push('the file pauses the print at ' + l.z.toFixed(1) + ' mm');
       if (slot >= 1 && slot <= 4 && slot !== cur) { meta.changes.push({ h: Math.round(l.z * 100) / 100, slot }); cur = slot; }
     }
   }
@@ -449,7 +501,7 @@ function makeMaterial() {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvZ = position.z;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vZ;\nuniform float uThr[' + MAX_BANDS + '];\nuniform vec3 uCol[' + (MAX_BANDS + 1) + '];\nuniform int uN;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\nvec3 bandCol = uCol[0];\nfor (int i = 0; i < ' + MAX_BANDS + '; i++) { if (i < uN && vZ >= uThr[i]) bandCol = uCol[i + 1]; }\ndiffuseColor.rgb = bandCol;');
+      .replace('#include <color_fragment>', '#include <color_fragment>\nvec3 bandCol = uCol[0];\nfor (int i = 0; i < ' + MAX_BANDS + '; i++) { if (i < uN && vZ >= uThr[i]) bandCol = uCol[i + 1]; }\ndiffuseColor.rgb *= bandCol;');
   };
   return m;
 }
@@ -474,6 +526,17 @@ function rebuild(frame) {
   g.setAttribute('position', new THREE.BufferAttribute(S.V, 3));
   g.computeVertexNormals();
   if (!mesh) S.material = makeMaterial();
+  if (S.proj && S.F) {
+    const cols = new Float32Array(S.V.length), tmp = new THREE.Color(), cache = {};
+    for (let t = 0; t < S.F.length; t++) {
+      const f = S.F[t];
+      let c = cache[f];
+      if (!c) { tmp.set(S.fcol[f - 1] || '#cccccc'); c = cache[f] = [tmp.r, tmp.g, tmp.b]; }
+      for (let k = 0; k < 3; k++) { cols[t * 9 + k * 3] = c[0]; cols[t * 9 + k * 3 + 1] = c[1]; cols[t * 9 + k * 3 + 2] = c[2]; }
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+  }
+  if (S.material.vertexColors !== S.proj) { S.material.vertexColors = S.proj; S.material.needsUpdate = true; }
   mesh = new THREE.Mesh(g, S.material);
   scene.add(mesh);
   if (frame) {
@@ -523,6 +586,7 @@ function applyLayer() {
 }
 function applyColors() {
   if (!uniforms) return;
+  if (S.proj) { uniforms.uN.value = 0; uniforms.uCol.value[0].set('#ffffff'); render(); return; }
   const ch = [...S.changes].sort((a, b) => a.h - b.h).slice(0, MAX_BANDS);
   uniforms.uCol.value[0].set(hex(S.base));
   ch.forEach((c, i) => { uniforms.uThr.value[i] = c.h - S.layerH; uniforms.uCol.value[i + 1].set(hex(c.slot)); });
@@ -591,14 +655,59 @@ $('#applyScale').onclick = () => {
   if (S.V && f > 0) { scaleBy(f); $('#scalePct').value = '100'; }
 };
 
+// ---------- filament -> AMS slot mapping (project files) ----------
+function hexRgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) || 0); }
+function cdist(a, b) { const x = hexRgb(a), y = hexRgb(b); return (x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2 + (x[2] - y[2]) ** 2; }
+function autoMap() {
+  const loaded = [0, 1, 2, 3].filter(k => S.amsTypes[k]);
+  const map = {};
+  if (!loaded.length) { S.used.forEach(f => { map[f] = ((f - 1) % 4) + 1; }); S.map = map; return; }
+  const pairs = [];
+  S.used.forEach(f => loaded.forEach(k => pairs.push([cdist(S.fcol[f - 1], S.amsSlots[k]), f, k + 1])));
+  pairs.sort((a, b) => a[0] - b[0]);
+  const usedSlot = new Set();
+  for (const [, f, k] of pairs) if (!map[f] && !usedSlot.has(k)) { map[f] = k; usedSlot.add(k); }
+  for (const [, f, k] of pairs) if (!map[f]) map[f] = k;     // more filaments than slots: share the closest one
+  S.map = map;
+}
+function setProjUI() {
+  const on = S.proj;
+  $('#secProj').hidden = !on;
+  $('#secChanges').hidden = on;
+  ['rotX', 'rotY', 'rotZ', 'scalePct', 'applyScale'].forEach(id => { $('#' + id).hidden = on; });
+  if (!on) return;
+  const box = $('#projList'); box.innerHTML = '';
+  for (const f of S.used) {
+    const row = document.createElement('div'); row.className = 'prow';
+    row.innerHTML = '<span class="sw"></span><span class="grow"></span><select></select><span class="sw sl"></span>';
+    row.querySelector('.sw').style.background = S.fcol[f - 1];
+    row.querySelector('.grow').textContent = 'Filament ' + f + (S.ftype[f - 1] ? ' · ' + S.ftype[f - 1] : '');
+    const sel = row.querySelector('select');
+    for (let k = 1; k <= 4; k++) {
+      const o = document.createElement('option'); o.value = k;
+      o.textContent = 'Slot ' + k + (S.amsTypes[k - 1] ? ' · ' + S.amsTypes[k - 1] : '');
+      sel.appendChild(o);
+    }
+    sel.value = String(S.map[f] || 1);
+    const sl = row.querySelector('.sl');
+    const paint = () => { sl.style.background = S.amsTypes[(+sel.value) - 1] ? S.amsSlots[(+sel.value) - 1] : S.slots[(+sel.value) - 1]; };
+    paint();
+    sel.onchange = () => { S.map[f] = +sel.value; S.mapTouched = true; paint(); };
+    box.appendChild(row);
+  }
+  $('#projNote').textContent = S.used.length > 4
+    ? 'The AMS has 4 slots and this file uses ' + S.used.length + ' filaments, so some filaments must share a slot.' : '';
+  $('#projNote').className = 'meta' + (S.used.length > 4 ? ' warn' : '');
+}
+
 try { initScene(); } catch (e) { console.warn('3D viewer unavailable', e); }
 
 // ---------- public API ----------
 window.viewer = {
   async load(file) {
     const buf = await file.arrayBuffer();
-    let V, meta = null;
-    if (/\.3mf$/i.test(file.name)) ({ V, meta } = parse3mf(buf));
+    let V, F = null, meta = null;
+    if (/\.3mf$/i.test(file.name)) ({ V, F, meta } = parse3mf(buf));
     else V = new Float32Array(new STLLoader().parse(buf).attributes.position.array);
     if (V.length / 9 > MAX_TRIS) throw new Error('the model has too many triangles (max 1.5 million)');
     if (V.length < 9) throw new Error('the model has no triangles');
@@ -624,6 +733,20 @@ window.viewer = {
       if (mopt) $('#material').value = mopt.value;
       S.base = meta.base; $('#baseSlot').value = String(meta.base);
     }
+    S.proj = !!(meta && meta.used.length > 1);
+    S.F = S.proj ? F : null; S.file = file; S.mapTouched = false;
+    if (S.proj) {
+      S.used = meta.used.slice();
+      S.fcol = meta.colors.map(c => c || '#cccccc'); S.ftype = meta.types.slice();
+      S.used.forEach(f => { if (!S.fcol[f - 1]) S.fcol[f - 1] = '#cccccc'; });
+      S.locked = [false, false, false, false];
+      S.slots = S.amsSlots.slice(); S.types = S.amsTypes.slice();
+      autoMap();
+      const i0 = info.findIndex(x => /filament colors/.test(x)); if (i0 >= 0) info.splice(i0, 1);
+      info.push(S.used.length + ' filaments used' + (meta.painted ? ', painted colors' : ''));
+      meta.changes = [];
+    }
+    setProjUI();
     S.layerH = parseFloat($('#layer').value) || 0.2;
     $('#layerSlider').max = 1e9;
     renderList();
@@ -640,6 +763,13 @@ window.viewer = {
     return out;
   },
   hasModel() { return !!S.V; },
+  isProject() { return S.proj; },
+  projFile() { return S.file; },
+  mapArray() {
+    if (!S.proj) return null;
+    const n = Math.max(...S.used);
+    return Array.from({ length: n }, (_, i) => S.used.includes(i + 1) ? (S.map[i + 1] || 1) - 1 : -1);
+  },
   setLayerHeight(v) {
     if (!(v > 0)) return;
     const frac = S.layer / S.nLayers;
@@ -669,7 +799,9 @@ window.viewer = {
       S.types[k] = type;
       if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.slots[k] = '#' + col.toLowerCase();
     });
+    if (S.proj && !S.mapTouched) autoMap();
     refreshSlotUI();
+    setProjUI();
     renderList();
     applyColors();
   },
@@ -821,6 +953,7 @@ window.viewer = {
   function expectedNames() {
     const mat = $('#material').value, p = window.viewer.changesParam();
     const names = [];
+    if (window.viewer.isProject()) return [`${sliceBase}_${mat}_PROJ.gcode.3mf`];
     if (p) {
       const m = p.match(/^base=(\d+);(.*);slots=/);
       let n = m ? +m[1] : 1;
@@ -850,7 +983,9 @@ window.viewer = {
     try {
       progress(true, 4);
       st.textContent = 'Uploading the model…';
-      const file = new File([window.viewer.toStlBlob()], sliceBase + '.stl', { type: 'model/stl' });
+      const proj = window.viewer.isProject();
+      const file = proj ? new File([window.viewer.projFile()], sliceBase + '.3mf')
+                        : new File([window.viewer.toStlBlob()], sliceBase + '.stl', { type: 'model/stl' });
       const name = await uploadToGithub(file, 'incoming');
       const t0 = Date.now() - 15000;
       progress(true, 10);
@@ -860,7 +995,7 @@ window.viewer = {
         headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + cfg.token, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: cfg.branch, inputs: {
           model: 'incoming/' + name, material: $('#material').value, layer: $('#layer').value,
-          infill: String(infill), changes: window.viewer.changesParam() } })
+          infill: String(infill), changes: proj ? 'project' : window.viewer.changesParam() } })
       });
       if (r.status !== 204) {
         let d = ''; try { d = (await r.json()).message; } catch {}
@@ -888,6 +1023,8 @@ window.viewer = {
           progress(true, 100);
           await loadFiles();
           const fresh = expectedNames().map(n => lastFiles.find(f => f.name === n)).find(f => f && before[f.name] !== f.sha);
+          const mp = window.viewer.mapArray();
+          if (fresh && mp) { try { localStorage.setItem('ams:' + fresh.name, JSON.stringify(mp)); } catch {} }
           if (!fresh) { st.textContent = 'Sliced, but the new file was not found in the list. Reload the list.'; progress(false); return; }
           if (!thenPrint) { st.textContent = 'Sliced: ' + fresh.name + '. Press Upload & print in Files.'; progress(false); return; }
           st.textContent = 'Sliced. Sending ' + fresh.name + ' to the printer…';
@@ -950,7 +1087,14 @@ window.viewer = {
   function send(name, print, skipConfirm) {
     if (!headSha) { say('File list not loaded yet.', true); return; }
     if (print && !skipConfirm && !confirm('Start printing ' + name + ' now?\nMake sure the bed is clear and filament is loaded.')) return;
-    if (publish({ action: print ? 'print' : 'upload', name, url: rawUrl(headSha, name) }))
+    const cmd = { action: print ? 'print' : 'upload', name, url: rawUrl(headSha, name) };
+    if (print) {
+      let mp = null;
+      try { mp = JSON.parse(localStorage.getItem('ams:' + name) || 'null'); } catch {}
+      if (!mp && /_PROJ\./.test(name)) mp = [0, 1, 2, 3];
+      if (Array.isArray(mp)) cmd.ams = mp;
+    }
+    if (publish(cmd))
       say((print ? 'Sent print command for ' : 'Sent upload command for ') + name + '. Watch the status above.');
   }
 

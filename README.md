@@ -80,6 +80,13 @@ After you pick a model, a 3D preview appears. Drag to rotate the view. The butto
 - When you slice, the file is named `name_MATERIAL_AMS3.gcode.3mf` (the number is how many slots it uses), and
   **Upload & print** starts it with the AMS: filament 1 is slot 1, filament 2 is slot 2, and so on.
 
+### Bambu Studio / OrcaSlicer project files
+
+A 3mf saved from Bambu Studio or OrcaSlicer is read for its filament colors, painted colors, layer height and infill. When it uses
+several filaments, a **Filaments in this file** list lets you choose the AMS slot for each one, like Bambu Studio. The slicer
+then slices the project as saved (rotate and scale in Bambu Studio first), and the slot choice is sent to the printer when it starts.
+This needs the ESP32 sketch v14.
+
 Changing the layer height clears the color changes, because they were placed for the old layer height.
 
 If the job fails, the page shows a link to the log. Copy the log text if you need help.
