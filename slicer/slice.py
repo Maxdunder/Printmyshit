@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libwebkit2gtk-4.1-0 libglu1-mesa libegl1 libgl1 libosmesa6
-      - name: Download OrcaSlicer
+           - name: Download OrcaSlicer
         run: |
           url=$(gh api repos/SoftFever/OrcaSlicer/releases/latest \
             --jq '.assets[].browser_download_url
@@ -62,7 +62,6 @@ jobs:
           chmod +x orca.AppImage
           ./orca.AppImage --appimage-extract > /dev/null
           ls squashfs-root | head -30
- 
       - name: Slice
         run: python3 slicer/slice.py
  
