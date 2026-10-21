@@ -140,33 +140,45 @@ def main():
     base = re.sub(r"\.(stl|3mf)$", "", Path(MODEL).name, flags=re.I)[:40]
     final_name = f"{base}_{MATERIAL}.gcode.3mf"
 
-    cmd = [
-        "xvfb-run", "-a", "squashfs-root/AppRun",
-        "--arrange", "1",
-        "--load-settings", f"{paths['machine']};{paths['process']}",
-        "--load-filaments", paths["filament"],
-        "--slice", "0",
-        "--outputdir", str(out.resolve()),
-        "--export-3mf", final_name,
-        str(Path(MODEL).resolve()),
+    model_path = str(Path(MODEL).resolve())
+    settings = f"{paths['machine']};{paths['process']}"
+    variants = [
+        ("A: arrange, slice all plates", ["--arrange", "1", "--slice", "0"]),
+        ("B: no arrange, slice plate 1", ["--slice", "1"]),
+        ("C: newer-file allowed, slice plate 1", ["--allow-newer-file", "--slice", "1"]),
     ]
-    print("running:", " ".join(cmd))
-    try:
-        subprocess.run(cmd, timeout=900)
-    except subprocess.TimeoutExpired:
-        print("slicer timed out")
-
-    print("files in out/:")
-    for f in sorted(out.rglob("*")):
-        if f.is_file():
-            print("  ", f, f.stat().st_size)
-
-    result = out / final_name
-    if not result.is_file():
+    result = None
+    for label, extra in variants:
+        shutil.rmtree(out, ignore_errors=True)
+        out.mkdir()
+        cmd = (["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3"] + extra + [
+            "--load-settings", settings,
+            "--load-filaments", paths["filament"],
+            "--outputdir", str(out.resolve()),
+            "--export-3mf", final_name,
+            model_path,
+        ])
+        print(f"\n===== variant {label} =====")
+        print("running:", " ".join(cmd), flush=True)
+        try:
+            r = subprocess.run(cmd, timeout=900)
+            print("exit code:", r.returncode)
+        except subprocess.TimeoutExpired:
+            print("slicer timed out")
+        print("files in out/:")
+        for f in sorted(out.rglob("*")):
+            if f.is_file():
+                print("  ", f, f.stat().st_size)
+        rj = out / "result.json"
+        if rj.is_file():
+            print("result.json:", rj.read_text(errors="replace"))
         found = sorted(out.rglob("*.3mf"))
-        if not found:
-            die("the slicer produced no .3mf file; see the log above")
-        result = found[0]
+        if found:
+            result = found[0]
+            break
+
+    if result is None:
+        die("the slicer produced no .3mf file in any variant; see the log above")
 
     with zipfile.ZipFile(result) as z:
         names = z.namelist()
