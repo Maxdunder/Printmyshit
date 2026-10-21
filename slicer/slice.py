@@ -46,8 +46,8 @@ jobs:
 
       - name: Download OrcaSlicer
         run: |
-          url=$(gh api repos/SoftFever/OrcaSlicer/releases/latest \
-            --jq '[.assets[].browser_download_url | select(test("AppImage$"))] | (map(select(test("Ubuntu2404"))) + .)[0]')
+          url=$(gh api repos/OrcaSlicer/OrcaSlicer/releases/latest \
+            --jq '[.assets[].browser_download_url | select(test("AppImage$")) | select(test("aarch64") | not)] | (map(select(test("Ubuntu2404"))) + .)[0]')
           echo "Using $url"
           curl -fsSL "$url" -o orca.AppImage
           chmod +x orca.AppImage
