@@ -18,6 +18,10 @@ on:
         description: "Infill in percent"
         required: true
         default: "15"
+      changes:
+        description: "AMS color changes, e.g. base=1;5.2:2;10.4:3;slots=#ff0000,#00ff00,#0000ff,#ffff00"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -35,6 +39,7 @@ jobs:
       MATERIAL: ${{ inputs.material }}
       LAYER: ${{ inputs.layer }}
       INFILL: ${{ inputs.infill }}
+      CHANGES: ${{ inputs.changes }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
