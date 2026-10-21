@@ -1,1 +1,0 @@
-Test file for the ESP32 FTPS upload. If you can read this on the printer's storage, the transfer worked.
