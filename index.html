@@ -60,7 +60,19 @@
   .msg { min-height: 1.4em; margin: 0 0 14px; font-size: .9rem; color: var(--muted); }
   .msg.err { color: var(--warn); }
   small { color: var(--muted); }
-  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } }
+  .viewer { position: relative; height: 340px; border-radius: 10px; overflow: hidden; background: var(--code);
+            touch-action: none; margin-bottom: 8px; }
+  .viewer canvas { display: block; width: 100%; height: 100%; }
+  .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 4px; }
+  .slot { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--muted); }
+  input[type=color] { width: 36px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
+                      background: none; cursor: pointer; }
+  input[type=range] { width: 100%; }
+  .chg { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .9rem; }
+  .chg .sw { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); flex: none; }
+  .chg .grow { flex: 1; }
+  .warn { color: var(--warn); }
+  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } .slots { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
 <body>
@@ -99,10 +111,32 @@
 
   <section class="card" id="sliceCard">
     <h2>Slice a model</h2>
-    <p class="meta" style="margin-top:-6px">Choose an .stl or an unsliced .3mf. GitHub slices it for the A1 and the result appears in Files.</p>
+    <p class="meta" style="margin-top:-6px">Choose an .stl or an unsliced .3mf. Preview it, pick AMS color changes by layer, and GitHub slices it for the A1.</p>
     <div class="drop" id="sdrop"><span id="sname">Drop a model here, or tap to choose</span>
       <input type="file" id="sfile" accept=".stl,.3mf" hidden></div>
-    <div class="two">
+    <div id="vwrap" hidden>
+      <div class="viewer" id="viewer"></div>
+      <div class="actions" style="margin:8px 0">
+        <button id="rotX">Rotate X 90°</button>
+        <button id="rotY">Rotate Y 90°</button>
+        <button id="rotZ">Rotate Z 90°</button>
+        <input type="text" id="scalePct" value="100" style="width:64px" inputmode="numeric" aria-label="Scale in percent">
+        <button id="applyScale">Scale %</button>
+      </div>
+      <p class="meta" id="dims"></p>
+      <label for="layerSlider">Layer <b id="layerLabel"></b></label>
+      <input type="range" id="layerSlider" min="1" max="100" value="100">
+      <label>AMS slot colors (used for the preview)</label>
+      <div class="slots" id="slotBox"></div>
+      <div class="two">
+        <div><label for="baseSlot">First filament</label><select id="baseSlot"></select></div>
+        <div><label for="chgSlot">Change to</label>
+          <div class="row" style="gap:8px;flex-wrap:nowrap"><select id="chgSlot" style="flex:1"></select>
+            <button id="addChange">At this layer</button></div></div>
+      </div>
+      <div id="changeList"></div>
+    </div>
+    <div class="two" style="margin-top:12px">
       <div><label for="material">Material</label>
         <select id="material"><option>PLA</option><option>PETG</option><option>ABS</option><option>TPU</option></select></div>
       <div><label for="layer">Layer height</label>
@@ -143,6 +177,314 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "fflate":"https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { unzipSync, strFromU8 } from 'fflate';
+
+const $ = s => document.querySelector(s);
+const BED = 256, MAX_TRIS = 1500000, MAX_BANDS = 8;
+const S = { V: null, layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], base: 1,
+            changes: [], layer: 1, nLayers: 1, size: [0, 0, 0] };
+
+// ---------- reading models ----------
+const ID = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+const mt = t => { if (!t) return ID; const v = t.trim().split(/\s+/).map(Number); return v.length === 12 ? v : ID; };
+const ap = (m, x, y, z) => [x * m[0] + y * m[3] + z * m[6] + m[9], x * m[1] + y * m[4] + z * m[7] + m[10], x * m[2] + y * m[5] + z * m[8] + m[11]];
+const comp = (a, b) => {   // a first, then b
+  const out = [];
+  for (let r = 0; r < 4; r++) {
+    const x = a[r * 3], y = a[r * 3 + 1], z = a[r * 3 + 2];
+    let ox = x * b[0] + y * b[3] + z * b[6], oy = x * b[1] + y * b[4] + z * b[7], oz = x * b[2] + y * b[5] + z * b[8];
+    if (r === 3) { ox += b[9]; oy += b[10]; oz += b[11]; }
+    out.push(ox, oy, oz);
+  }
+  return out;
+};
+
+function parse3mf(buf) {
+  const files = unzipSync(new Uint8Array(buf));
+  const NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+  const PNS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+  const cache = {};
+  const model = path => {
+    path = path.replace(/^\//, '');
+    if (!cache[path]) {
+      if (!files[path]) throw new Error('missing ' + path + ' in the 3mf');
+      const doc = new DOMParser().parseFromString(strFromU8(files[path]), 'application/xml');
+      const objs = {};
+      for (const o of doc.getElementsByTagNameNS(NS, 'object')) objs[o.getAttribute('id')] = o;
+      cache[path] = { objs, doc };
+    }
+    return cache[path];
+  };
+  const out = [];
+  const emit = (path, id, m) => {
+    const o = model(path).objs[id];
+    const mesh = o.getElementsByTagNameNS(NS, 'mesh')[0];
+    if (mesh) {
+      const vs = [...mesh.getElementsByTagNameNS(NS, 'vertex')]
+        .map(v => ap(m, +v.getAttribute('x'), +v.getAttribute('y'), +v.getAttribute('z')));
+      for (const t of mesh.getElementsByTagNameNS(NS, 'triangle'))
+        for (const k of ['v1', 'v2', 'v3']) { const p = vs[+t.getAttribute(k)]; out.push(p[0], p[1], p[2]); }
+    }
+    for (const c of o.getElementsByTagNameNS(NS, 'component')) {
+      const sub = c.getAttributeNS(PNS, 'path') || c.getAttribute('p:path') || path;
+      emit(sub, c.getAttribute('objectid'), comp(mt(c.getAttribute('transform')), m));
+    }
+  };
+  const main = '3D/3dmodel.model';
+  const { doc } = model(main);
+  const build = doc.getElementsByTagNameNS(NS, 'build')[0];
+  for (const item of build.getElementsByTagNameNS(NS, 'item'))
+    emit(item.getAttributeNS(PNS, 'path') || item.getAttribute('p:path') || main, item.getAttribute('objectid'), mt(item.getAttribute('transform')));
+  if (!out.length) throw new Error('no triangles found in the 3mf');
+  return new Float32Array(out);
+}
+
+// ---------- scene ----------
+let renderer, scene, camera, controls, mesh, plane, uniforms, ready = false;
+function initScene() {
+  if (ready) return;
+  const host = $('#viewer');
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.localClippingEnabled = true;
+  host.appendChild(renderer.domElement);
+  scene = new THREE.Scene();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--code').trim();
+  scene.background = new THREE.Color(bg || '#efefea');
+  camera = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+  camera.up.set(0, 0, 1);
+  camera.position.set(0, -330, 260);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.addEventListener('change', render);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.1));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.4);
+  dir.position.set(150, -200, 300);
+  scene.add(dir);
+
+  const bed = new THREE.Mesh(new THREE.PlaneGeometry(BED, BED), new THREE.MeshBasicMaterial({ color: 0x8a8a84, transparent: true, opacity: 0.35 }));
+  bed.position.z = -0.05;
+  scene.add(bed);
+  const grid = new THREE.GridHelper(BED, 16, 0x555550, 0x777772);
+  grid.rotation.x = Math.PI / 2;
+  scene.add(grid);
+
+  plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1e6);
+  uniforms = { uThr: { value: new Array(MAX_BANDS).fill(1e9) },
+               uCol: { value: Array.from({ length: MAX_BANDS + 1 }, () => new THREE.Color(0xcccccc)) },
+               uN: { value: 0 } };
+  new ResizeObserver(resize).observe(host);
+  ready = true;
+  resize();
+}
+function resize() {
+  const host = $('#viewer');
+  const w = host.clientWidth || 300, h = host.clientHeight || 300;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  render();
+}
+function render() { if (ready) renderer.render(scene, camera); }
+
+function makeMaterial() {
+  const m = new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.0, side: THREE.DoubleSide, clippingPlanes: [plane] });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uThr = uniforms.uThr; sh.uniforms.uCol = uniforms.uCol; sh.uniforms.uN = uniforms.uN;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvZ = position.z;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vZ;\nuniform float uThr[' + MAX_BANDS + '];\nuniform vec3 uCol[' + (MAX_BANDS + 1) + '];\nuniform int uN;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\nvec3 bandCol = uCol[0];\nfor (int i = 0; i < ' + MAX_BANDS + '; i++) { if (i < uN && vZ >= uThr[i]) bandCol = uCol[i + 1]; }\ndiffuseColor.rgb = bandCol;');
+  };
+  return m;
+}
+
+// ---------- model operations ----------
+function normalize() {
+  const V = S.V;
+  let minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9;
+  for (let i = 0; i < V.length; i += 3) {
+    if (V[i] < minx) minx = V[i]; if (V[i] > maxx) maxx = V[i];
+    if (V[i + 1] < miny) miny = V[i + 1]; if (V[i + 1] > maxy) maxy = V[i + 1];
+    if (V[i + 2] < minz) minz = V[i + 2]; if (V[i + 2] > maxz) maxz = V[i + 2];
+  }
+  const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+  for (let i = 0; i < V.length; i += 3) { V[i] -= cx; V[i + 1] -= cy; V[i + 2] -= minz; }
+  S.size = [maxx - minx, maxy - miny, maxz - minz];
+}
+function rebuild(frame) {
+  normalize();
+  if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(S.V, 3));
+  g.computeVertexNormals();
+  if (!mesh) S.material = makeMaterial();
+  mesh = new THREE.Mesh(g, S.material);
+  scene.add(mesh);
+  if (frame) {
+    const r = Math.max(S.size[0], S.size[1], S.size[2], 40);
+    controls.target.set(0, 0, S.size[2] / 2);
+    camera.position.set(r * 1.1, -r * 1.9, r * 1.3 + S.size[2] / 2);
+    controls.update();
+  }
+  const big = S.size.some(v => v > BED);
+  $('#dims').innerHTML = S.size.map(v => v.toFixed(1)).join(' × ') + ' mm' +
+    (big ? ' <span class="warn">Too big for the A1 (256 mm). Scale it down.</span>' : '');
+  updateLayers();
+  render();
+}
+function rotate(axis) {
+  const V = S.V;
+  for (let i = 0; i < V.length; i += 3) {
+    const x = V[i], y = V[i + 1], z = V[i + 2];
+    if (axis === 'x') { V[i + 1] = -z; V[i + 2] = y; }
+    else if (axis === 'y') { V[i] = z; V[i + 2] = -x; }
+    else { V[i] = -y; V[i + 1] = x; }
+  }
+  rebuild(false);
+}
+function scaleBy(f) {
+  if (!(f > 0.01 && f < 100)) return;
+  for (let i = 0; i < S.V.length; i++) S.V[i] *= f;
+  rebuild(false);
+}
+
+// ---------- layers and colors ----------
+const hex = i => S.slots[i - 1];
+function updateLayers() {
+  S.nLayers = Math.max(1, Math.round(S.size[2] / S.layerH));
+  const sl = $('#layerSlider');
+  const keepTop = S.layer >= +sl.max || S.layer > S.nLayers;
+  sl.max = S.nLayers;
+  S.layer = keepTop ? S.nLayers : Math.min(S.layer, S.nLayers);
+  sl.value = S.layer;
+  applyLayer();
+}
+function applyLayer() {
+  const z = S.layer * S.layerH;
+  $('#layerLabel').textContent = S.layer + ' of ' + S.nLayers + ' · ' + z.toFixed(2) + ' mm';
+  if (plane) plane.constant = z + 0.001;
+  render();
+}
+function applyColors() {
+  if (!uniforms) return;
+  const ch = [...S.changes].sort((a, b) => a.h - b.h).slice(0, MAX_BANDS);
+  uniforms.uCol.value[0].set(hex(S.base));
+  ch.forEach((c, i) => { uniforms.uThr.value[i] = c.h - S.layerH; uniforms.uCol.value[i + 1].set(hex(c.slot)); });
+  for (let i = ch.length; i < MAX_BANDS; i++) uniforms.uThr.value[i] = 1e9;
+  uniforms.uN.value = ch.length;
+  render();
+}
+function renderList() {
+  const box = $('#changeList');
+  box.innerHTML = '';
+  const sorted = [...S.changes].sort((a, b) => a.h - b.h);
+  if (sorted.length > MAX_BANDS) {
+    const w = document.createElement('p'); w.className = 'meta warn';
+    w.textContent = 'The preview shows the first ' + MAX_BANDS + ' changes; all of them are still sliced.';
+    box.appendChild(w);
+  }
+  for (const c of sorted) {
+    const row = document.createElement('div'); row.className = 'chg';
+    row.innerHTML = '<span class="sw"></span><span class="grow"></span><button>Remove</button>';
+    row.querySelector('.sw').style.background = hex(c.slot);
+    row.querySelector('.grow').textContent = 'From ' + c.h.toFixed(2) + ' mm (layer ' + Math.round(c.h / S.layerH) + '): AMS slot ' + c.slot;
+    row.querySelector('button').onclick = () => { S.changes = S.changes.filter(x => x !== c); renderList(); applyColors(); };
+    box.appendChild(row);
+  }
+}
+
+// ---------- UI wiring ----------
+function buildSlotUI() {
+  const box = $('#slotBox');
+  box.innerHTML = '';
+  for (let i = 1; i <= 4; i++) {
+    const d = document.createElement('label'); d.className = 'slot'; d.style.margin = '0';
+    d.innerHTML = '<input type="color"><span>Slot ' + i + '</span>';
+    const inp = d.querySelector('input'); inp.value = S.slots[i - 1];
+    inp.oninput = () => { S.slots[i - 1] = inp.value; renderList(); applyColors(); };
+    box.appendChild(d);
+  }
+  for (const id of ['#baseSlot', '#chgSlot']) {
+    const sel = $(id); sel.innerHTML = '';
+    for (let i = 1; i <= 4; i++) { const o = document.createElement('option'); o.value = i; o.textContent = 'Slot ' + i; sel.appendChild(o); }
+  }
+  $('#chgSlot').value = '2';
+}
+buildSlotUI();
+$('#baseSlot').onchange = () => { S.base = +$('#baseSlot').value; applyColors(); };
+$('#layerSlider').oninput = () => { S.layer = +$('#layerSlider').value; applyLayer(); };
+$('#addChange').onclick = () => {
+  if (S.layer <= 1) { alert('Pick a layer above the first one.'); return; }
+  const h = Math.round(S.layer * S.layerH * 100) / 100;
+  S.changes = S.changes.filter(c => Math.abs(c.h - h) > 1e-6);
+  S.changes.push({ h, slot: +$('#chgSlot').value });
+  renderList(); applyColors();
+};
+$('#rotX').onclick = () => S.V && rotate('x');
+$('#rotY').onclick = () => S.V && rotate('y');
+$('#rotZ').onclick = () => S.V && rotate('z');
+$('#applyScale').onclick = () => {
+  const f = parseFloat($('#scalePct').value) / 100;
+  if (S.V && f > 0) { scaleBy(f); $('#scalePct').value = '100'; }
+};
+
+// ---------- public API ----------
+window.viewer = {
+  async load(file) {
+    const buf = await file.arrayBuffer();
+    let V;
+    if (/\.3mf$/i.test(file.name)) V = parse3mf(buf);
+    else V = new Float32Array(new STLLoader().parse(buf).attributes.position.array);
+    if (V.length / 9 > MAX_TRIS) throw new Error('the model has too many triangles (max 1.5 million)');
+    if (V.length < 9) throw new Error('the model has no triangles');
+    $('#vwrap').hidden = false;
+    initScene();
+    S.V = V;
+    S.changes = []; S.layer = 1e9;
+    S.layerH = parseFloat($('#layer').value) || 0.2;
+    $('#layerSlider').max = 1e9;
+    renderList();
+    rebuild(true);
+    applyColors();
+  },
+  hasModel() { return !!S.V; },
+  setLayerHeight(v) {
+    if (!(v > 0)) return;
+    const frac = S.layer / S.nLayers;
+    S.layerH = v;
+    S.changes = [];       // heights were picked for the old layer height
+    renderList();
+    updateLayers();
+    applyColors();
+  },
+  toStlBlob() {
+    const n = S.V.length / 9, b = new ArrayBuffer(84 + 50 * n), dv = new DataView(b);
+    dv.setUint32(80, n, true);
+    for (let i = 0, o = 84; i < n; i++, o += 50) {
+      for (let k = 0; k < 9; k++) dv.setFloat32(o + 12 + k * 4, S.V[i * 9 + k], true);
+    }
+    return new Blob([b], { type: 'model/stl' });
+  },
+  changesParam() {
+    if (!S.changes.length) return '';
+    const ch = [...S.changes].sort((a, b) => a.h - b.h).map(c => c.h + ':' + c.slot).join(';');
+    return 'base=' + S.base + ';' + ch + ';slots=' + S.slots.join(',');
+  }
+};
+</script>
+
 <script>
   const $ = s => document.querySelector(s);
   const FIELDS = ['owner', 'repo', 'branch', 'token', 'ws', 'muser', 'mpass', 'prefix'];
@@ -262,32 +604,40 @@
   }
 
   // ---------- slicing (GitHub Actions) ----------
-  let sliceFile = null;
-  function pickModel(file) {
+  let sliceBase = '';
+  async function pickModel(file) {
     if (!file) return;
-    if (!/\.(stl|3mf)$/i.test(file.name)) { $('#sstat').textContent = 'Only .stl or .3mf models.'; return; }
-    sliceFile = file;
-    $('#sname').textContent = file.name + ' (' + fmt(file.size) + ')';
-    $('#sstat').textContent = '';
+    const st = $('#sstat');
+    if (!/\.(stl|3mf)$/i.test(file.name)) { st.textContent = 'Only .stl or .3mf models.'; return; }
+    if (!window.viewer) { st.textContent = 'The 3D viewer did not load (check your connection) and reload the page.'; return; }
+    try {
+      st.textContent = 'Loading ' + file.name + '…';
+      await window.viewer.load(file);
+      sliceBase = file.name.replace(/\.(stl|3mf)$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40) || 'model';
+      $('#sname').textContent = file.name + ' (' + fmt(file.size) + ')';
+      st.textContent = '';
+    } catch (e) { st.textContent = 'Could not read the model: ' + (e.message || e); }
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   async function runSlice() {
     const st = $('#sstat'), btn = $('#bSlice');
-    if (!sliceFile) { st.textContent = 'Choose a model first.'; return; }
+    if (!window.viewer || !window.viewer.hasModel()) { st.textContent = 'Choose a model first.'; return; }
     const infill = parseInt($('#infill').value, 10);
     if (!(infill >= 0 && infill <= 100)) { st.textContent = 'Infill must be 0 to 100.'; return; }
     btn.disabled = true;
     try {
       st.textContent = 'Uploading the model…';
-      const name = await uploadToGithub(sliceFile, 'incoming');
+      const file = new File([window.viewer.toStlBlob()], sliceBase + '.stl', { type: 'model/stl' });
+      const name = await uploadToGithub(file, 'incoming');
       const t0 = Date.now() - 15000;
       st.textContent = 'Starting the slicer…';
       const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/actions/workflows/slice.yml/dispatches`, {
         method: 'POST',
         headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + cfg.token, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: cfg.branch, inputs: {
-          model: 'incoming/' + name, material: $('#material').value, layer: $('#layer').value, infill: String(infill) } })
+          model: 'incoming/' + name, material: $('#material').value, layer: $('#layer').value,
+          infill: String(infill), changes: window.viewer.changesParam() } })
       });
       if (r.status !== 204) {
         let d = ''; try { d = (await r.json()).message; } catch {}
@@ -306,7 +656,6 @@
         if (j.status === 'completed') {
           if (j.conclusion === 'success') {
             st.textContent = 'Sliced. The file is in the list below.';
-            sliceFile = null; $('#sname').textContent = 'Drop a model here, or tap to choose';
             await loadFiles();
           } else {
             st.innerHTML = '';
@@ -400,6 +749,7 @@
   ['dragleave', 'drop'].forEach(e => sdrop.addEventListener(e, ev => { ev.preventDefault(); sdrop.classList.remove('over'); }));
   sdrop.addEventListener('drop', ev => pickModel(ev.dataTransfer.files[0]));
   $('#bSlice').onclick = runSlice;
+  $('#layer').onchange = () => { if (window.viewer) window.viewer.setLayerHeight(parseFloat($('#layer').value)); };
 
   loadCfg();
   if (!cfg.token || !cfg.ws) $('#settings').open = true;
