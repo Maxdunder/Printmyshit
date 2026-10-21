@@ -204,13 +204,10 @@ def main():
     out.mkdir()
 
     machine = flatten(pick([MACHINE], index, "printer"), index)
-    machine["from"] = "User"
     machine["printer_settings_id"] = machine["name"]
 
     process = flatten(pick([PROCESSES[LAYER]], index, "process"), index)
-    process["from"] = "User"
     process["print_settings_id"] = process["name"]
-    process["compatible_printers"] = []
     process["layer_height"] = LAYER
     process["sparse_infill_density"] = f"{INFILL}%"
     if MATERIAL == "ABS":
@@ -220,57 +217,66 @@ def main():
         process["brim_object_gap"] = "0"
 
     filament = flatten(pick(FILAMENTS[MATERIAL], index, "filament"), index)
-    filament["from"] = "User"
     filament["filament_settings_id"] = [filament["name"]]
-    filament["compatible_printers"] = []
 
     print("machine :", machine["name"])
     print("process :", process["name"], f"(layer {LAYER}, infill {INFILL}%)")
     print("filament:", filament["name"])
+    print("process compatible_printers:", process.get("compatible_printers"),
+          "| condition:", repr(process.get("compatible_printers_condition")))
+    print("filament compatible_printers:", filament.get("compatible_printers"),
+          "| condition:", repr(filament.get("compatible_printers_condition")))
 
-    paths = {}
-    for kind, data in (("machine", machine), ("process", process), ("filament", filament)):
-        p = work / f"{kind}.json"
-        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        paths[kind] = str(p.resolve())
+    def write_profiles(compat, origin):
+        """compat: how to treat the compatible_printers fields; origin: the 'from' field."""
+        paths = {}
+        for kind, base_data in (("machine", machine), ("process", process), ("filament", filament)):
+            data = json.loads(json.dumps(base_data))
+            data["from"] = origin
+            if kind != "machine":
+                if compat == "list":
+                    data["compatible_printers"] = [machine["name"]]
+                    data["compatible_printers_condition"] = ""
+                elif compat == "none":
+                    data.pop("compatible_printers", None)
+                    data.pop("compatible_printers_condition", None)
+                # "asis" leaves the profile's own values
+            p = work / f"{kind}.json"
+            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            paths[kind] = str(p.resolve())
+        return paths
 
     base = re.sub(r"\.(stl|3mf)$", "", Path(MODEL).name, flags=re.I)[:40]
     final_name = f"{base}_{MATERIAL}.gcode.3mf"
 
-    model_path = str(Path(MODEL).resolve())
-    settings = f"{paths['machine']};{paths['process']}"
-    variants = []
+    models = []
     if MODEL.lower().endswith(".3mf"):
-        stripped = work / "stripped.3mf"
-        try:
-            strip_3mf(MODEL, stripped)
-            variants.append(("S: 3mf without its own presets", str(stripped.resolve()),
-                             ["--allow-newer-file", "--arrange", "1", "--slice", "0"]))
-        except Exception as e:
-            print("could not strip the 3mf:", e)
         converted = work / "converted.stl"
         try:
             n = threemf_to_stl(MODEL, converted)
             print(f"converted the 3mf to STL: {n} triangles")
-            variants.append(("T: mesh converted to STL", str(converted.resolve()), ["--arrange", "1", "--slice", "0"]))
+            models.append(str(converted.resolve()))
         except Exception as e:
             print("could not convert the 3mf to STL:", e)
     else:
-        variants.append(("A: arrange, slice all plates", model_path, ["--arrange", "1", "--slice", "0"]))
-        variants.append(("B: no arrange, slice plate 1", model_path, ["--slice", "1"]))
+        models.append(str(Path(MODEL).resolve()))
+    if not models:
+        die("no usable model")
 
+    combos = [("list", "User"), ("none", "User"), ("asis", "User"), ("list", "system")]
     result = None
-    for label, mpath, extra in variants:
+    for compat, origin in combos:
+        paths = write_profiles(compat, origin)
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir()
-        cmd = (["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3"] + extra + [
-            "--load-settings", settings,
-            "--load-filaments", paths["filament"],
-            "--outputdir", str(out.resolve()),
-            "--export-3mf", final_name,
-            mpath,
-        ])
-        print(f"\n===== variant {label} =====")
+        cmd = ["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3",
+               "--arrange", "1", "--slice", "0",
+               "--load-settings", f"{paths['machine']};{paths['process']}",
+               "--load-filaments", paths["filament"],
+               "--outputdir", str(out.resolve()),
+               "--export-3mf", final_name,
+               models[0]]
+        print(f"\n===== attempt: compatible_printers={compat}, from={origin} =====")
         print("running:", " ".join(cmd), flush=True)
         try:
             r = subprocess.run(cmd, timeout=900)
@@ -290,7 +296,7 @@ def main():
             break
 
     if result is None:
-        die("the slicer produced no .3mf file in any variant; see the log above")
+        die("the slicer produced no .3mf file in any attempt; see the log above")
 
     with zipfile.ZipFile(result) as z:
         names = z.namelist()
