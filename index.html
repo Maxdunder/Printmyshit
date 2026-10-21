@@ -52,7 +52,7 @@
   .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center;
           color: var(--muted); margin-bottom: 14px; cursor: pointer; }
   .drop.over { border-color: var(--accent); color: var(--text); }
-  input[type=text], input[type=password] { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
+  input[type=text], input[type=password], select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
           border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -66,7 +66,7 @@
 <body>
 <main>
   <h1>Print Files</h1>
-  <p class="sub">Upload a sliced .3mf, pick one, and send it to the printer.</p>
+  <p class="sub">Slice a model online, pick a file, and send it to the printer.</p>
 
   <div class="chips">
     <span class="chip" id="chipGh">GitHub: not set</span>
@@ -97,6 +97,23 @@
     <div class="actions" style="margin-top:8px"><button id="bReload">Reload list</button></div>
   </section>
 
+  <section class="card" id="sliceCard">
+    <h2>Slice a model</h2>
+    <p class="meta" style="margin-top:-6px">Choose an .stl or an unsliced .3mf. GitHub slices it for the A1 and the result appears in Files.</p>
+    <div class="drop" id="sdrop"><span id="sname">Drop a model here, or tap to choose</span>
+      <input type="file" id="sfile" accept=".stl,.3mf" hidden></div>
+    <div class="two">
+      <div><label for="material">Material</label>
+        <select id="material"><option>PLA</option><option>PETG</option><option>ABS</option><option>TPU</option></select></div>
+      <div><label for="layer">Layer height</label>
+        <select id="layer"><option>0.08</option><option>0.12</option><option>0.16</option><option selected>0.20</option><option>0.24</option><option>0.28</option></select></div>
+    </div>
+    <label for="infill">Infill (%)</label>
+    <input type="text" id="infill" value="15" inputmode="numeric" style="max-width:120px">
+    <div class="actions" style="margin-top:12px"><button class="primary" id="bSlice">Slice on GitHub</button></div>
+    <p class="meta" id="sstat" style="margin-bottom:0"></p>
+  </section>
+
   <section class="card">
     <details id="settings">
       <summary>Settings</summary>
@@ -107,10 +124,10 @@
       </div>
       <div class="two">
         <div><label for="branch">Branch</label><input type="text" id="branch" placeholder="main" autocomplete="off"></div>
-        <div><label for="token">GitHub token (contents: read and write)</label><input type="password" id="token" autocomplete="off"></div>
+        <div><label for="token">GitHub token (contents + actions: read and write)</label><input type="password" id="token" autocomplete="off"></div>
       </div>
       <label for="ws">Broker WebSocket URL</label>
-      <input type="text" id="ws" placeholder="wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt" autocomplete="off">
+      <input type="text" id="ws" placeholder="wss://YOUR-ADDRESS:8084/mqtt" autocomplete="off">
       <div class="two">
         <div><label for="muser">Broker username</label><input type="text" id="muser" autocomplete="off"></div>
         <div><label for="mpass">Broker password</label><input type="password" id="mpass" autocomplete="off"></div>
@@ -220,10 +237,10 @@
     }
   }
 
-  async function uploadToGithub(file) {
+  async function uploadToGithub(file, dir = 'models') {
     if (!cfg.token) throw new Error('Add a GitHub token in Settings first.');
     const name = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
-    const path = '/contents/models/' + encodeURIComponent(name);
+    const path = '/contents/' + dir + '/' + encodeURIComponent(name);
     const content = toB64(await file.arrayBuffer());
     let sha;
     try { sha = (await gh(path + '?ref=' + encodeURIComponent(cfg.branch))).sha; } catch (e) { if (e.status !== 404) throw e; }
@@ -242,6 +259,69 @@
       say('Uploaded ' + name + '.');
       await loadFiles();
     } catch (e) { say('Upload failed: ' + (e.detail || e.message), true); }
+  }
+
+  // ---------- slicing (GitHub Actions) ----------
+  let sliceFile = null;
+  function pickModel(file) {
+    if (!file) return;
+    if (!/\.(stl|3mf)$/i.test(file.name)) { $('#sstat').textContent = 'Only .stl or .3mf models.'; return; }
+    sliceFile = file;
+    $('#sname').textContent = file.name + ' (' + fmt(file.size) + ')';
+    $('#sstat').textContent = '';
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  async function runSlice() {
+    const st = $('#sstat'), btn = $('#bSlice');
+    if (!sliceFile) { st.textContent = 'Choose a model first.'; return; }
+    const infill = parseInt($('#infill').value, 10);
+    if (!(infill >= 0 && infill <= 100)) { st.textContent = 'Infill must be 0 to 100.'; return; }
+    btn.disabled = true;
+    try {
+      st.textContent = 'Uploading the model…';
+      const name = await uploadToGithub(sliceFile, 'incoming');
+      const t0 = Date.now() - 15000;
+      st.textContent = 'Starting the slicer…';
+      const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/actions/workflows/slice.yml/dispatches`, {
+        method: 'POST',
+        headers: { Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + cfg.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: cfg.branch, inputs: {
+          model: 'incoming/' + name, material: $('#material').value, layer: $('#layer').value, infill: String(infill) } })
+      });
+      if (r.status !== 204) {
+        let d = ''; try { d = (await r.json()).message; } catch {}
+        throw new Error('Could not start the slicer (' + r.status + '): ' + d +
+          (r.status === 404 ? ' (is .github/workflows/slice.yml in the repo?)' : r.status === 403 || r.status === 401 ? ' (token needs Actions: read and write)' : ''));
+      }
+      let run = null;
+      for (let i = 0; i < 20 && !run; i++) {
+        await sleep(3000);
+        const j = await gh('/actions/workflows/slice.yml/runs?event=workflow_dispatch&per_page=5');
+        run = (j.workflow_runs || []).find(x => new Date(x.created_at).getTime() >= t0) || null;
+      }
+      if (!run) throw new Error('The slicing job did not start. Check the Actions tab on GitHub.');
+      for (let i = 0; i < 200; i++) {
+        const j = await gh('/actions/runs/' + run.id);
+        if (j.status === 'completed') {
+          if (j.conclusion === 'success') {
+            st.textContent = 'Sliced. The file is in the list below.';
+            sliceFile = null; $('#sname').textContent = 'Drop a model here, or tap to choose';
+            await loadFiles();
+          } else {
+            st.innerHTML = '';
+            const a = document.createElement('a'); a.href = j.html_url; a.target = '_blank'; a.rel = 'noopener';
+            a.textContent = 'Slicing failed. Open the log.';
+            st.appendChild(a);
+          }
+          return;
+        }
+        st.textContent = 'Slicing… ' + Math.round((Date.now() - new Date(run.created_at).getTime()) / 1000) + ' s (usually 1 to 3 minutes)';
+        await sleep(6000);
+      }
+      st.textContent = 'Still running after 20 minutes. Check the Actions tab on GitHub.';
+    } catch (e) { st.textContent = (e.detail || e.message); }
+    finally { btn.disabled = false; }
   }
 
   // ---------- MQTT ----------
@@ -312,6 +392,14 @@
   ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => handleFile(ev.dataTransfer.files[0]));
+
+  const sdrop = $('#sdrop'), sinput = $('#sfile');
+  sdrop.onclick = () => sinput.click();
+  sinput.onchange = () => { pickModel(sinput.files[0]); sinput.value = ''; };
+  ['dragenter', 'dragover'].forEach(e => sdrop.addEventListener(e, ev => { ev.preventDefault(); sdrop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => sdrop.addEventListener(e, ev => { ev.preventDefault(); sdrop.classList.remove('over'); }));
+  sdrop.addEventListener('drop', ev => pickModel(ev.dataTransfer.files[0]));
+  $('#bSlice').onclick = runSlice;
 
   loadCfg();
   if (!cfg.token || !cfg.ws) $('#settings').open = true;
