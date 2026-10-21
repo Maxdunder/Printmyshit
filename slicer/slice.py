@@ -1,5 +1,5 @@
 name: Slice
- 
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,14 +18,14 @@ on:
         description: "Infill in percent"
         required: true
         default: "15"
- 
+
 permissions:
   contents: write
- 
+
 concurrency:
   group: slice
   cancel-in-progress: false
- 
+
 jobs:
   slice:
     runs-on: ubuntu-24.04
@@ -38,33 +38,25 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
- 
+
       - name: Install system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libwebkit2gtk-4.1-0 libglu1-mesa libegl1 libgl1 libosmesa6
-           - name: Download OrcaSlicer
+
+      - name: Download OrcaSlicer
         run: |
-          url=$(gh api repos/SoftFever/OrcaSlicer/releases/latest \
-            --jq '.assets[].browser_download_url
-              | select(test("AppImage$"))
-              | select(test("Ubuntu2404"))
-              | select(test("x86_64|x86-64|amd64"))
-            ' | head -n 1)
-
-          if [ -z "$url" ]; then
-            echo "No x86_64 Linux AppImage found for OrcaSlicer"
-            exit 1
-          fi
-
+          url=$(gh api repos/OrcaSlicer/OrcaSlicer/releases/latest \
+            --jq '[.assets[].browser_download_url | select(test("AppImage$")) | select(test("aarch64") | not)] | (map(select(test("Ubuntu2404"))) + .)[0]')
           echo "Using $url"
           curl -fsSL "$url" -o orca.AppImage
           chmod +x orca.AppImage
           ./orca.AppImage --appimage-extract > /dev/null
           ls squashfs-root | head -30
+
       - name: Slice
         run: python3 slicer/slice.py
- 
+
       - name: Commit the sliced file
         run: |
           git config user.name "github-actions"
