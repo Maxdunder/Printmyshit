@@ -766,7 +766,7 @@ window.viewer = {
   isProject() { return S.proj; },
   projFile() { return S.file; },
   mapArray() {
-    if (!S.proj) return null;
+    if (!S.proj) return S.changes.length ? null : [S.base - 1];   // one filament: use the chosen AMS slot
     const n = Math.max(...S.used);
     return Array.from({ length: n }, (_, i) => S.used.includes(i + 1) ? (S.map[i + 1] || 1) - 1 : -1);
   },
@@ -1101,6 +1101,7 @@ window.viewer = {
       let mp = null;
       try { mp = JSON.parse(localStorage.getItem('ams:' + name) || 'null'); } catch {}
       if (!mp && /_PROJ\./.test(name)) mp = [0, 1, 2, 3];
+      if (!mp && !/_AMS\d/.test(name)) mp = [0];
       if (Array.isArray(mp)) cmd.ams = mp;
     }
     if (publish(cmd))
