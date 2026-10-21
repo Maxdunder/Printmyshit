@@ -284,6 +284,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 const $ = s => document.querySelector(s);
 const BED = 256, MAX_TRIS = 1500000, MAX_BANDS = 8;
 const S = { V: null, layerH: 0.2, slots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], types: ['', '', '', ''], base: 1,
+            amsSlots: ['#e53935', '#1e88e5', '#43a047', '#fdd835'], amsTypes: ['', '', '', ''], locked: [false, false, false, false],
             changes: [], layer: 1, nLayers: 1, size: [0, 0, 0] };
 
 // ---------- reading models ----------
@@ -338,7 +339,58 @@ function parse3mf(buf) {
   for (const item of build.getElementsByTagNameNS(NS, 'item'))
     emit(item.getAttributeNS(PNS, 'path') || item.getAttribute('p:path') || main, item.getAttribute('objectid'), mt(item.getAttribute('transform')));
   if (!out.length) throw new Error('no triangles found in the 3mf');
-  return new Float32Array(out);
+  return { V: new Float32Array(out), meta: readMeta(files) };
+}
+
+// Colors and settings stored by Bambu Studio / OrcaSlicer inside the 3mf
+function readMeta(files) {
+  const txt = n => files[n] ? strFromU8(files[n]) : '';
+  const meta = { colors: [], types: [], base: 1, changes: [], layerH: 0, infill: -1, warn: [] };
+  let ps = null;
+  try { ps = JSON.parse(txt('Metadata/project_settings.config') || 'null'); } catch {}
+  const arr = v => Array.isArray(v) ? v : (v == null ? [] : [v]);
+  if (ps) {
+    meta.colors = arr(ps.filament_colour).map(c => /^#[0-9a-fA-F]{6}/.test(c) ? c.slice(0, 7).toLowerCase() : '');
+    meta.types = arr(ps.filament_type).map(t => String(t || '').toUpperCase());
+    meta.layerH = parseFloat(ps.layer_height) || 0;
+    const inf = parseFloat(String(ps.sparse_infill_density || '').replace('%', ''));
+    if (inf >= 0 && inf <= 100) meta.infill = inf;
+  }
+  const ms = txt('Metadata/model_settings.config');
+  if (ms) {
+    const ex = [...ms.matchAll(/key="extruder"\s+value="(\d+)"/g)].map(m => +m[1]);
+    if (ex.length) {
+      meta.base = ex[0] || 1;
+      if (new Set(ex).size > 1) meta.warn.push('objects or parts use different filaments (only layer color changes are sliced)');
+    }
+  }
+  for (const n of Object.keys(files)) {
+    if (/^3D\/.*\.model$/.test(n) && /paint_color=|mmu_segmentation=/.test(strFromU8(files[n]).slice(0, 4e6)))
+      { meta.warn.push('the model has painted colors, which the online slicer cannot use (only layer color changes)'); break; }
+  }
+  const cg = txt('Metadata/custom_gcode_per_layer.xml');
+  if (cg) {
+    const doc = new DOMParser().parseFromString(cg, 'application/xml');
+    const near = hexc => {
+      const v = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+      const a = v(hexc); let best = 1, bd = 1e9;
+      meta.colors.forEach((c, i) => { if (!c) return; const b = v(c); const d = (a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2; if (d < bd) { bd = d; best = i + 1; } });
+      return best;
+    };
+    let cur = meta.base;
+    const layers = [...doc.getElementsByTagName('layer')]
+      .map(l => ({ z: parseFloat(l.getAttribute('top_z')), type: +l.getAttribute('type'),
+                   ext: +l.getAttribute('extruder') || 0, col: (l.getAttribute('color') || '').toLowerCase() }))
+      .filter(l => l.z > 0).sort((a, b) => a.z - b.z);
+    for (const l of layers) {
+      let slot = 0;
+      if (l.type === 2 && l.ext) slot = l.ext;
+      else if (l.type === 0 && /^#[0-9a-f]{6}/.test(l.col)) slot = near(l.col);
+      if (slot >= 1 && slot <= 4 && slot !== cur) { meta.changes.push({ h: Math.round(l.z * 100) / 100, slot }); cur = slot; }
+    }
+  }
+  if (meta.base > 4) meta.base = 1;
+  return meta;
 }
 
 // ---------- scene ----------
@@ -545,8 +597,8 @@ try { initScene(); } catch (e) { console.warn('3D viewer unavailable', e); }
 window.viewer = {
   async load(file) {
     const buf = await file.arrayBuffer();
-    let V;
-    if (/\.3mf$/i.test(file.name)) V = parse3mf(buf);
+    let V, meta = null;
+    if (/\.3mf$/i.test(file.name)) ({ V, meta } = parse3mf(buf));
     else V = new Float32Array(new STLLoader().parse(buf).attributes.position.array);
     if (V.length / 9 > MAX_TRIS) throw new Error('the model has too many triangles (max 1.5 million)');
     if (V.length < 9) throw new Error('the model has no triangles');
@@ -554,12 +606,38 @@ window.viewer = {
     $('#sliceCard').classList.remove('nomodel');
     $('#emptyOverlay').hidden = true; $('#vtools').hidden = false; $('#changeFile').hidden = false;
     S.V = V;
-    S.changes = []; S.layer = 1e9;
+    S.changes = []; S.layer = 1e9; S.base = 1; $('#baseSlot').value = '1';
+    S.slots = S.amsSlots.slice(); S.types = S.amsTypes.slice(); S.locked = [false, false, false, false];
+    const info = [];
+    if (meta) {
+      const hasCol = meta.colors.some(c => c);
+      meta.colors.slice(0, 4).forEach((c, k) => { if (c) { S.slots[k] = c; S.locked[k] = true; } });
+      meta.types.slice(0, 4).forEach((t, k) => { if (t && meta.colors[k]) S.types[k] = t; });
+      if (hasCol) info.push(Math.min(4, meta.colors.length) + ' filament colors');
+      if (meta.layerH) {
+        const opt = [...$('#layer').options].find(o => Math.abs(parseFloat(o.value) - meta.layerH) < 1e-6);
+        if (opt) { $('#layer').value = opt.value; info.push('layer ' + opt.value); }
+      }
+      if (meta.infill >= 0) { $('#infill').value = String(Math.round(meta.infill)); info.push('infill ' + Math.round(meta.infill) + '%'); }
+      const bt = (meta.types[meta.base - 1] || '').replace(/^ASA$/, 'ABS').replace(/-(CF|GF|HF)$/, '').replace(/^TPU.*/, 'TPU');
+      const mopt = [...$('#material').options].find(o => o.value === bt);
+      if (mopt) $('#material').value = mopt.value;
+      S.base = meta.base; $('#baseSlot').value = String(meta.base);
+    }
     S.layerH = parseFloat($('#layer').value) || 0.2;
     $('#layerSlider').max = 1e9;
     renderList();
+    if (meta && meta.changes.length) {
+      S.changes = meta.changes.map(c => ({ h: c.h, slot: c.slot }));
+      info.push(meta.changes.length + ' color change' + (meta.changes.length > 1 ? 's' : ''));
+    }
+    refreshSlotUI();
     rebuild(true);
+    renderList();
     applyColors();
+    let out = info.length ? 'Read from the 3mf: ' + info.join(', ') + '.' : '';
+    if (meta && meta.warn.length) out += (out ? ' ' : '') + 'Note: ' + meta.warn.join('; ') + '.';
+    return out;
   },
   hasModel() { return !!S.V; },
   setLayerHeight(v) {
@@ -585,6 +663,9 @@ window.viewer = {
     trays.slice(0, 4).forEach((t, k) => {
       const type = String((t && t[0]) || '').toUpperCase();
       const col = String((t && t[1]) || '');
+      S.amsTypes[k] = type;
+      if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.amsSlots[k] = '#' + col.toLowerCase();
+      if (S.locked[k]) return;
       S.types[k] = type;
       if (type && /^[0-9a-fA-F]{6}$/.test(col)) S.slots[k] = '#' + col.toLowerCase();
     });
@@ -730,9 +811,9 @@ window.viewer = {
     if (!window.viewer) { st.textContent = 'The 3D viewer did not load (check your connection) and reload the page.'; return; }
     try {
       st.textContent = 'Loading ' + file.name + '…';
-      await window.viewer.load(file);
+      const note = await window.viewer.load(file);
       sliceBase = file.name.replace(/\.(stl|3mf)$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40) || 'model';
-      st.textContent = '';
+      st.textContent = note || '';
     } catch (e) { st.textContent = 'Could not read the model: ' + (e.message || e); }
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
