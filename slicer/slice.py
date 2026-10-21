@@ -417,55 +417,64 @@ def run_project():
     base = re.sub(r"\.(stl|3mf)$", "", Path(MODEL).name, flags=re.I)[:40]
     final = f"{base}_{MATERIAL}_PROJ.gcode.3mf"
     src = work / "project.3mf"
-    with zipfile.ZipFile(MODEL) as zin, zipfile.ZipFile(src, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == "Metadata/project_settings.config":
-                try:
-                    cfg = _json.loads(data)
-                    old_h = str(cfg.get("layer_height", ""))
-                    cfg["sparse_infill_density"] = f"{int(float(INFILL))}%"
-                    if abs(float(old_h or 0) - float(LAYER)) > 1e-6:
-                        cfg["layer_height"] = str(LAYER)
-                        cfg["_layer_changed"] = True
-                    data = _json.dumps(cfg, indent=4).encode()
-                    print(f"project settings: layer {old_h} -> {cfg['layer_height']}, infill {cfg['sparse_infill_density']}")
-                except Exception as e:
-                    print("could not patch project_settings.config:", e)
-            if item.filename == "Metadata/layer_heights_profile.txt":
-                try:
-                    zcfg = _json.loads(zin.read("Metadata/project_settings.config"))
-                    if abs(float(zcfg.get("layer_height", 0)) - float(LAYER)) > 1e-6:
-                        continue    # variable layer heights no longer match
-                except Exception:
-                    pass
-            zout.writestr(item, data)
-    for extra in (["--allow-newer-file"], ["--allow-newer-file", "--allow-multicolor-oneplate"]):
+    fixes = {}      # parameter -> value forced because the slicer rejected the stored one
+
+    def build_src():
+        with zipfile.ZipFile(MODEL) as zin, zipfile.ZipFile(src, "w", zipfile.ZIP_DEFLATED) as zout:
+            try:
+                zcfg = _json.loads(zin.read("Metadata/project_settings.config"))
+            except Exception:
+                zcfg = {}
+            layer_changed = abs(float(zcfg.get("layer_height", 0) or 0) - float(LAYER)) > 1e-6
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "Metadata/project_settings.config" and zcfg:
+                    zcfg["sparse_infill_density"] = f"{int(float(INFILL))}%"
+                    if layer_changed:
+                        zcfg["layer_height"] = str(LAYER)
+                    for k, v in fixes.items():
+                        zcfg[k] = v
+                    data = _json.dumps(zcfg, indent=4).encode()
+                    print(f"project settings: layer {zcfg['layer_height']}, infill {zcfg['sparse_infill_density']}, forced {fixes}")
+                if item.filename == "Metadata/layer_heights_profile.txt" and layer_changed:
+                    continue    # variable layer heights no longer match
+                zout.writestr(item, data)
+
+    for attempt in range(6):
+        build_src()
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir()
-        cmd = (["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3"] + extra +
-               ["--slice", "0", "--outputdir", str(out.resolve()), "--export-3mf", final, str(src.resolve())])
-        print("\n===== project mode =====")
+        cmd = (["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3", "--allow-newer-file",
+                "--slice", "0", "--outputdir", str(out.resolve()), "--export-3mf", final, str(src.resolve())])
+        print(f"\n===== project mode, attempt {attempt + 1} =====")
         print("running:", " ".join(cmd), flush=True)
+        text = ""
         try:
-            r = subprocess.run(cmd, timeout=1500)
+            r = subprocess.run(cmd, timeout=1500, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            text = r.stdout.decode("utf-8", errors="replace")
+            print(text[-6000:])
             print("exit code:", r.returncode)
         except subprocess.TimeoutExpired:
             print("slicer timed out")
         for f in sorted(out.rglob("*")):
             if f.is_file():
                 print("  ", f, f.stat().st_size)
-        rj = out / "result.json"
-        if rj.is_file():
-            print("result.json:", rj.read_text(errors="replace"))
         found = sorted(out.rglob("*.3mf"))
         if found:
-            text = read_gcode(found[0])
-            if text is not None:
-                tools = swap_evidence(text)
-                print("filaments used in the G-code:", sorted(tools))
+            g = read_gcode(found[0])
+            if g is not None:
+                print("filaments used in the G-code:", sorted(swap_evidence(g)))
                 finish(found[0], final)
                 return
+        # "param: value not in range [lo,hi]": clamp those values and try again
+        bad = re.findall(r"(?m)^(\w+): (-?[\d.eE+-]+) not in range \[(-?[\d.eE+-]+),(-?[\d.eE+-]+)\]", text)
+        if not bad:
+            break
+        for key, val, lo, hi in bad:
+            v, lo, hi = float(val), float(lo), float(hi)
+            nv = min(max(v, lo), hi)
+            fixes[key] = str(int(nv)) if nv == int(nv) else str(nv)
+            print(f"clamping {key}: {val} -> {fixes[key]}")
     die("could not slice the project file; see the log above")
 
 
