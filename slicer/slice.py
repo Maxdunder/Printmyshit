@@ -34,6 +34,103 @@ PROCESSES = {
 }
 
 
+import struct
+import xml.etree.ElementTree as ET
+
+NS_CORE = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
+NS_PROD = "{http://schemas.microsoft.com/3dmanufacturing/production/2015/06}"
+
+
+def strip_3mf(src, dst):
+    """Copy a .3mf without its Metadata/, so none of its own printer or process presets are used."""
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        keep = {i.filename for i in zin.infolist()
+                if not i.filename.startswith(("Metadata/", "Auxiliaries/"))}
+        for name in zin.namelist():
+            if name not in keep:
+                continue
+            data = zin.read(name)
+            if name == "_rels/.rels":
+                text = data.decode("utf-8")
+                def drop(m):
+                    t = re.search(r'Target="/?([^"]*)"', m.group(0))
+                    return m.group(0) if (t and t.group(1) in keep) else ""
+                text = re.sub(r"<Relationship\b[^>]*/>", drop, text)
+                data = text.encode("utf-8")
+            zout.writestr(name, data)
+
+
+def _matrix(text):
+    v = [float(x) for x in text.split()] if text else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+    return v if len(v) == 12 else [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+
+
+def _apply(m, p):
+    x, y, z = p
+    return (x * m[0] + y * m[3] + z * m[6] + m[9],
+            x * m[1] + y * m[4] + z * m[7] + m[10],
+            x * m[2] + y * m[5] + z * m[8] + m[11])
+
+
+def _compose(a, b):
+    """a first, then b (row-vector convention used by 3MF)."""
+    ra = [a[0:3], a[3:6], a[6:9], a[9:12]]
+    out = []
+    for r in range(4):
+        row = ra[r] + ([0.0] if r < 3 else [1.0])
+        x, y, z = row[0], row[1], row[2]
+        base = [x * b[0] + y * b[3] + z * b[6], x * b[1] + y * b[4] + z * b[7], x * b[2] + y * b[5] + z * b[8]]
+        if r == 3:
+            base = [base[0] + b[9], base[1] + b[10], base[2] + b[11]]
+        out.extend(base)
+    return out
+
+
+def threemf_to_stl(src, dst):
+    """Merge every mesh in a .3mf (with transforms) into one binary STL. Returns the triangle count."""
+    z = zipfile.ZipFile(src)
+    cache = {}
+
+    def model(path):
+        path = path.lstrip("/")
+        if path not in cache:
+            root = ET.fromstring(z.read(path))
+            cache[path] = {o.get("id"): o for o in root.iter(NS_CORE + "object")}, root
+        return cache[path]
+
+    tris = []
+
+    def emit(path, objid, mat):
+        objs, _ = model(path)
+        obj = objs[objid]
+        mesh = obj.find(NS_CORE + "mesh")
+        if mesh is not None:
+            verts = [(float(v.get("x")), float(v.get("y")), float(v.get("z")))
+                     for v in mesh.find(NS_CORE + "vertices")]
+            wv = [_apply(mat, v) for v in verts]
+            for t in mesh.find(NS_CORE + "triangles"):
+                tris.append((wv[int(t.get("v1"))], wv[int(t.get("v2"))], wv[int(t.get("v3"))]))
+        comps = obj.find(NS_CORE + "components")
+        if comps is not None:
+            for c in comps:
+                sub = c.get(NS_PROD + "path") or path
+                emit(sub, c.get("objectid"), _compose(_matrix(c.get("transform")), mat))
+
+    main = "3D/3dmodel.model"
+    _, root = model(main)
+    build = root.find(NS_CORE + "build")
+    for item in build.iter(NS_CORE + "item"):
+        emit(item.get(NS_PROD + "path") or main, item.get("objectid"), _matrix(item.get("transform")))
+    if not tris:
+        raise RuntimeError("no triangles found in the 3mf")
+    with open(dst, "wb") as f:
+        f.write(b"converted from 3mf".ljust(80, b" "))
+        f.write(struct.pack("<I", len(tris)))
+        for a, b, c in tris:
+            f.write(struct.pack("<12fH", 0, 0, 0, *a, *b, *c, 0))
+    return len(tris)
+
+
 def die(msg):
     print("ERROR:", msg)
     sys.exit(1)
@@ -142,13 +239,28 @@ def main():
 
     model_path = str(Path(MODEL).resolve())
     settings = f"{paths['machine']};{paths['process']}"
-    variants = [
-        ("A: arrange, slice all plates", ["--arrange", "1", "--slice", "0"]),
-        ("B: no arrange, slice plate 1", ["--slice", "1"]),
-        ("C: newer-file allowed, slice plate 1", ["--allow-newer-file", "--slice", "1"]),
-    ]
+    variants = []
+    if MODEL.lower().endswith(".3mf"):
+        stripped = work / "stripped.3mf"
+        try:
+            strip_3mf(MODEL, stripped)
+            variants.append(("S: 3mf without its own presets", str(stripped.resolve()),
+                             ["--allow-newer-file", "--arrange", "1", "--slice", "0"]))
+        except Exception as e:
+            print("could not strip the 3mf:", e)
+        converted = work / "converted.stl"
+        try:
+            n = threemf_to_stl(MODEL, converted)
+            print(f"converted the 3mf to STL: {n} triangles")
+            variants.append(("T: mesh converted to STL", str(converted.resolve()), ["--arrange", "1", "--slice", "0"]))
+        except Exception as e:
+            print("could not convert the 3mf to STL:", e)
+    else:
+        variants.append(("A: arrange, slice all plates", model_path, ["--arrange", "1", "--slice", "0"]))
+        variants.append(("B: no arrange, slice plate 1", model_path, ["--slice", "1"]))
+
     result = None
-    for label, extra in variants:
+    for label, mpath, extra in variants:
         shutil.rmtree(out, ignore_errors=True)
         out.mkdir()
         cmd = (["xvfb-run", "-a", "squashfs-root/AppRun", "--debug", "3"] + extra + [
@@ -156,7 +268,7 @@ def main():
             "--load-filaments", paths["filament"],
             "--outputdir", str(out.resolve()),
             "--export-3mf", final_name,
-            model_path,
+            mpath,
         ])
         print(f"\n===== variant {label} =====")
         print("running:", " ".join(cmd), flush=True)
