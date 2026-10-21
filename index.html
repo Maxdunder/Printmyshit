@@ -895,7 +895,15 @@ window.viewer = {
       row.className = 'frow';
       row.innerHTML = '<div class="grow"><div class="name"></div><div class="meta"></div></div><div class="actions"></div>';
       row.querySelector('.name').textContent = f.name;
-      row.querySelector('.meta').textContent = fmt(f.size);
+      const metaEl = row.querySelector('.meta');
+      metaEl.textContent = fmt(f.size);
+      if (/\.3mf$/i.test(f.name)) {
+        fetch(rawUrl(headSha, f.name + '.json')).then(r => r.ok ? r.json() : null).then(j => {
+          if (!j || !j.time_s) return;
+          const m = Math.round(j.time_s / 60);
+          metaEl.textContent = fmt(f.size) + ' · ' + (m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : m + ' min') + (j.grams ? ' · ' + j.grams + ' g' : '');
+        }).catch(() => {});
+      }
       const acts = row.querySelector('.actions');
       const is3mf = /\.3mf$/i.test(f.name);
       const up = document.createElement('button');
@@ -1052,6 +1060,7 @@ window.viewer = {
     if (s.job) bits.push(s.job);
     if (s.pct >= 0) bits.push(s.pct + '%');
     if (s.layer >= 0) bits.push('layer ' + s.layer);
+    if (s.eta >= 0 && (state === 'RUNNING' || state === 'PAUSE')) bits.push(s.eta >= 60 ? Math.floor(s.eta / 60) + ' h ' + (s.eta % 60) + ' min left' : s.eta + ' min left');
     if (s.note) bits.push(s.note);
     $('#pMeta').textContent = bits.join(' · ') || '';
     if (s.ams && window.viewer) window.viewer.setAms(s.ams);

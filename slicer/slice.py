@@ -639,7 +639,36 @@ def main():
     finish(chosen, final_multi)
 
 
+def _secs(text):
+    t = 0
+    for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*([dhms])", text):
+        t += float(n) * {"d": 86400, "h": 3600, "m": 60, "s": 1}[u]
+    return int(t)
+
+
+def gcode_stats(gtext):
+    """Print time (s) and filament use (g per filament) from the G-code comments."""
+    head = gtext[:400000] + "\n" + gtext[-400000:]
+    secs = 0
+    for pat in (r"total estimated time:\s*([^;\n]+)", r"estimated printing time \(normal mode\)\s*=\s*([^\n]+)"):
+        m = re.search(pat, head)
+        if m and _secs(m.group(1)):
+            secs = _secs(m.group(1))
+            break
+    grams = []
+    m = re.search(r"filament used \[g\]\s*=\s*([^\n]+)", head)
+    if m:
+        grams = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", m.group(1))]
+    metres = []
+    m = re.search(r"filament used \[mm\]\s*=\s*([^\n]+)", head)
+    if m:
+        metres = [float(x) / 1000 for x in re.findall(r"-?\d+(?:\.\d+)?", m.group(1))]
+    return secs, grams, metres
+
+
 def finish(result, final_name):
+    import json as _json
+    from xml.sax.saxutils import quoteattr
     with zipfile.ZipFile(result) as z:
         names = z.namelist()
         print("largest files in the result (compressed bytes):")
@@ -650,7 +679,58 @@ def finish(result, final_name):
         die("the result has no Metadata/plate_*.gcode, so it is not a sliced file")
     Path("models").mkdir(exist_ok=True)
     dest = Path("models") / final_name
-    shutil.copy(result, dest)
+
+    # The printer reads the time estimate and the filament list from Metadata/slice_info.config.
+    secs, grams, metres = 0, [], []
+    try:
+        gtext = read_gcode(result) or ""
+        secs, grams, metres = gcode_stats(gtext)
+    except Exception as e:
+        print("could not read stats from the G-code:", e)
+    print(f"estimate: {secs} s, grams per filament: {grams}")
+    try:
+        with zipfile.ZipFile(result) as zin:
+            cfg = {}
+            try:
+                cfg = _json.loads(zin.read("Metadata/project_settings.config"))
+            except Exception:
+                pass
+            old = zin.read("Metadata/slice_info.config").decode("utf-8", "replace") if "Metadata/slice_info.config" in names else ""
+            if secs and 'key="prediction"' not in old:
+                types = cfg.get("filament_type", []) if isinstance(cfg.get("filament_type"), list) else []
+                cols = cfg.get("filament_colour", []) if isinstance(cfg.get("filament_colour"), list) else []
+                fil = ""
+                for i, g in enumerate(grams):
+                    if g > 0:
+                        t = types[i] if i < len(types) else "PLA"
+                        c = cols[i] if i < len(cols) else "#FFFFFF"
+                        m_ = metres[i] if i < len(metres) else 0
+                        fil += (f'    <filament id="{i + 1}" tray_info_idx="" type={quoteattr(str(t))} color={quoteattr(str(c))}'
+                                f' used_m="{m_:.2f}" used_g="{g:.2f}"/>\n')
+                plate = ('  <plate>\n    <metadata key="index" value="1"/>\n'
+                         f'    <metadata key="prediction" value="{secs}"/>\n'
+                         f'    <metadata key="weight" value="{sum(grams):.2f}"/>\n'
+                         '    <metadata key="nozzle_diameters" value="0.4"/>\n' + fil + '  </plate>\n')
+                if "</config>" in old:
+                    # drop an empty plate from the slicer, then add ours
+                    new_xml = re.sub(r"\s*<plate>.*?</plate>", "", old, flags=re.S).replace("</config>", plate + "</config>")
+                else:
+                    new_xml = '<?xml version="1.0" encoding="UTF-8"?>\n<config>\n' + plate + "</config>\n"
+                with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
+                    for item in zin.infolist():
+                        if item.filename == "Metadata/slice_info.config":
+                            continue
+                        zout.writestr(item, zin.read(item.filename))
+                    zout.writestr("Metadata/slice_info.config", new_xml)
+                print("added the time estimate and filament list to slice_info.config")
+            else:
+                shutil.copy(result, dest)
+                print("slice_info.config already has a prediction" if secs else "no estimate found in the G-code")
+    except Exception as e:
+        print("could not patch slice_info.config:", e)
+        shutil.copy(result, dest)
+    (Path("models") / (final_name + ".json")).write_text(_json.dumps(
+        {"time_s": secs, "grams": round(sum(grams), 1), "filaments": [round(g, 1) for g in grams]}))
     print(f"OK: {dest} ({dest.stat().st_size} bytes)")
 
 
