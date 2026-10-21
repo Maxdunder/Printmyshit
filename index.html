@@ -4,148 +4,240 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Print Files</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2322c55e'/%3E%3Cpath d='M9 22h14M11 22V12h10v10M13 12V9h6v3' stroke='%23052e16' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd;
-    --accent: #1f7a4d; --accent-text: #ffffff; --code: #efefea;
-    --warn: #b3402e; --ok: #1f7a4d; --busy: #b7791f;
+    --bg: #f3f4f6; --panel: #ffffff; --panel2: #f7f8fa; --text: #14161a; --muted: #6a717c; --line: #e3e6ea;
+    --accent: #16a34a; --accent2: #15803d; --accent-text: #ffffff; --accent-soft: rgba(22,163,74,.12);
+    --warn: #dc2626; --busy: #d97706; --viewbg: #e9ecf0; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #151514; --card: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #32322f;
-      --accent: #3fb27a; --accent-text: #0e1a14; --code: #292926;
-      --warn: #e07a66; --ok: #3fb27a; --busy: #e0b04f;
+      --bg: #0c0e12; --panel: #151820; --panel2: #1b1f29; --text: #eceef2; --muted: #8b93a1; --line: #262b36;
+      --accent: #22c55e; --accent2: #4ade80; --accent-text: #04210f; --accent-soft: rgba(34,197,94,.14);
+      --warn: #f87171; --busy: #fbbf24; --viewbg: #10131a; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
     }
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 28px 16px 64px; }
-  h1 { font-size: 1.6rem; margin: 0 0 2px; }
-  h2 { font-size: 1.05rem; margin: 0 0 12px; }
-  .sub { color: var(--muted); margin: 0 0 20px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-          padding: 16px; margin-bottom: 14px; }
+         font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 85%, transparent);
+         backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .top-in { max-width: 1240px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.1rem; letter-spacing: -.01em; }
+  .logo { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+  .logo svg { width: 18px; height: 18px; stroke: var(--accent-text); fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .chip { font-size: .75rem; padding: 3px 10px 3px 8px; border-radius: 999px; border: 1px solid var(--line);
+          color: var(--muted); background: var(--panel); display: inline-flex; align-items: center; gap: 6px; }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: .6; }
+  .chip.ok { color: var(--text); } .chip.ok::before { background: var(--accent); opacity: 1; }
+  .chip.bad { color: var(--text); } .chip.bad::before { background: var(--warn); opacity: 1; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 64px; }
+  .msg { min-height: 0; margin: 0 0 12px; font-size: .9rem; color: var(--muted); }
+  .msg:not(:empty) { padding: 10px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+  .msg.err { color: var(--warn); border-color: var(--warn); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 16px; }
+  h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin: 0 0 12px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .grow { flex: 1 1 200px; min-width: 0; }
   .name { font-weight: 600; word-break: break-all; }
   .meta { color: var(--muted); font-size: .85rem; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  button, .btn { font: inherit; font-size: .9rem; cursor: pointer; text-decoration: none;
-                 border-radius: 8px; padding: 7px 14px; border: 1px solid var(--line);
-                 background: var(--card); color: var(--text); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button.danger { color: var(--warn); border-color: var(--warn); }
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
-  .chip { font-size: .8rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
-          color: var(--muted); background: var(--card); }
-  .chip.ok { color: var(--ok); border-color: var(--ok); }
-  .chip.bad { color: var(--warn); border-color: var(--warn); }
-  .state { font-size: 1.3rem; font-weight: 700; }
-  .state.RUNNING, .state.PREPARE { color: var(--busy); }
-  .state.OFFLINE, .state.FAILED { color: var(--warn); }
-  .state.FINISH, .state.IDLE { color: var(--ok); }
-  .bar { height: 8px; background: var(--code); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
-  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
-  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center;
-          color: var(--muted); margin-bottom: 14px; cursor: pointer; }
-  .drop.over { border-color: var(--accent); color: var(--text); }
-  input[type=text], input[type=password], select { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
-          border: 1px solid var(--line); background: var(--bg); color: var(--text); }
-  label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  details summary { cursor: pointer; font-weight: 600; }
-  .msg { min-height: 1.4em; margin: 0 0 14px; font-size: .9rem; color: var(--muted); }
-  .msg.err { color: var(--warn); }
-  small { color: var(--muted); }
-  .viewer { position: relative; height: 340px; border-radius: 10px; overflow: hidden; background: var(--code);
-            touch-action: none; margin-bottom: 8px; }
+  button, .btn { font: inherit; font-size: .88rem; font-weight: 500; cursor: pointer; text-decoration: none;
+                 border-radius: 10px; padding: 8px 14px; border: 1px solid var(--line);
+                 background: var(--panel2); color: var(--text); transition: background .15s, transform .05s, border-color .15s; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: var(--accent2); border-color: var(--accent2); }
+  button.danger { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: transparent; }
+  button.sm { padding: 5px 10px; font-size: .8rem; border-radius: 8px; }
+  button.big { padding: 12px 16px; font-size: .98rem; border-radius: 12px; flex: 1 1 150px; }
+
+  /* printer strip */
+  .printer { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; margin-bottom: 16px; }
+  .state { font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .state::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .state.RUNNING::before, .state.PREPARE::before { background: var(--busy); animation: pulse 1.4s infinite; }
+  .state.FINISH::before, .state.IDLE::before { background: var(--accent); }
+  .state.OFFLINE::before, .state.FAILED::before { background: var(--warn); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .bar { height: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin: 8px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  @media (max-width: 760px) { .printer { grid-template-columns: 1fr; gap: 10px; } }
+
+  /* slicer stage */
+  .stage { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 940px) { .stage { grid-template-columns: 1fr; } }
+  .stage .card + .card { margin-top: 0; }
+  .vcard { padding: 12px; }
+  .viewer { position: relative; height: clamp(320px, 58vh, 580px); border-radius: 12px; overflow: hidden;
+            background: radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--viewbg) 80%, #fff 6%), var(--viewbg));
+            touch-action: none; }
   .viewer canvas { display: block; width: 100%; height: 100%; }
-  .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 4px; }
-  .slot { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--muted); }
-  input[type=color] { width: 36px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
-                      background: none; cursor: pointer; }
-  input[type=range] { width: 100%; }
-  .chg { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .9rem; }
-  .chg .sw { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line); flex: none; }
+  .empty { position: absolute; inset: 14px; border: 2px dashed var(--line); border-radius: 12px; display: grid; place-items: center;
+           text-align: center; color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .empty > div { background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 18px 26px; border-radius: 14px; border: 1px solid var(--line); }
+  .empty b { display: block; color: var(--text); font-size: 1.05rem; margin: 6px 0 2px; }
+  .empty svg { width: 38px; height: 38px; stroke: var(--accent); fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .empty:hover, .viewer.over .empty, .viewer.over { border-color: var(--accent); background: var(--accent-soft); }
+  .viewer.over { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .vdims { position: absolute; top: 10px; left: 10px; font-size: .78rem; padding: 3px 10px; border-radius: 999px;
+           background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--line); }
+  .vdims:empty { display: none; }
+  .vfile { position: absolute; top: 10px; right: 10px; }
+  .vtools { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .vtools button, .vtools input[type=text] { background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(6px); }
+  .vtools input[type=text] { width: 64px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); color: var(--text); font: inherit; font-size: .8rem; }
+  .vtools[hidden], .vfile[hidden], .empty[hidden] { display: none; }
+  .layerbox { padding: 12px 6px 2px; }
+  .layerbox label { display: flex; justify-content: space-between; margin: 0 0 4px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .nomodel .layerbox, .nomodel .needmodel { opacity: .45; pointer-events: none; }
+
+  /* panel */
+  .panel .sect { padding: 14px 0; border-top: 1px solid var(--line); }
+  .panel .sect:first-of-type { border-top: 0; padding-top: 0; }
+  label { display: block; font-size: .8rem; color: var(--muted); margin: 10px 0 4px; font-weight: 500; }
+  input[type=text], input[type=password], select { width: 100%; font: inherit; font-size: .92rem; padding: 9px 11px; border-radius: 10px;
+          border: 1px solid var(--line); background: var(--panel2); color: var(--text); }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .two label:first-child, .three label:first-child { margin-top: 0; }
+  .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .slot { margin: 0; display: flex; flex-direction: column; align-items: stretch; gap: 6px; font-size: .74rem; color: var(--muted);
+          text-align: center; cursor: pointer; }
+  .slot span { line-height: 1.2; min-height: 2.4em; }
+  input[type=color] { width: 100%; height: 38px; padding: 0; border: 2px solid var(--line); border-radius: 10px; background: none; cursor: pointer; }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 0; } input[type=color]::-webkit-color-swatch { border: 0; border-radius: 8px; }
+  input[type=color]::-moz-color-swatch { border: 0; border-radius: 8px; }
+  .chg { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 6px; border-radius: 10px; background: var(--panel2);
+         border: 1px solid var(--line); font-size: .86rem; }
+  .chg .sw { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--line); flex: none; }
   .chg .grow { flex: 1; }
   .warn { color: var(--warn); }
-  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } .slots { grid-template-columns: repeat(2, 1fr); } }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; }
+  .sprog { height: 6px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; margin-top: 12px; display: none; }
+  .sprog.on { display: block; }
+  .sprog > div { height: 100%; width: 0; background: var(--accent); transition: width .6s; }
+  #sstat { margin: 8px 0 0; min-height: 1.3em; }
+
+  /* files */
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 14px; text-align: center; color: var(--muted); margin-bottom: 10px; cursor: pointer; font-size: .9rem; }
+  .drop.over { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  .frow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 0; border-top: 1px solid var(--line); }
+  details summary { cursor: pointer; font-weight: 600; font-size: .9rem; }
+  small { color: var(--muted); }
 </style>
 </head>
 <body>
-<main>
-  <h1>Print Files</h1>
-  <p class="sub">Slice a model online, pick a file, and send it to the printer.</p>
-
+<header class="top"><div class="top-in">
+  <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M5 19h14M7 19V9h10v10M9 9V5h6v4"/></svg></span>Print Files</div>
   <div class="chips">
     <span class="chip" id="chipGh">GitHub: not set</span>
     <span class="chip" id="chipMqtt">Broker: not set</span>
     <span class="chip" id="chipEsp">ESP32: unknown</span>
   </div>
+</div></header>
 
+<main>
   <p class="msg" id="msg"></p>
 
-  <section class="card" id="printerCard">
-    <h2>Printer</h2>
-    <div class="state" id="pState">No data yet</div>
-    <div class="bar"><div id="pBar"></div></div>
-    <div class="meta" id="pMeta">Waiting for the ESP32 to report.</div>
-    <div class="actions" style="margin-top:12px">
-      <button id="bPause">Pause</button>
-      <button id="bResume">Resume</button>
-      <button id="bStop" class="danger">Stop print</button>
-      <button id="bPoll">Refresh</button>
+  <section class="card printer" id="printerCard">
+    <div>
+      <h2 style="margin-bottom:4px">Printer</h2>
+      <div class="state" id="pState">No data yet</div>
+    </div>
+    <div>
+      <div class="bar"><div id="pBar"></div></div>
+      <div class="meta" id="pMeta">Waiting for the ESP32 to report.</div>
+    </div>
+    <div class="actions">
+      <button id="bPause" class="sm">Pause</button>
+      <button id="bResume" class="sm">Resume</button>
+      <button id="bStop" class="sm danger">Stop</button>
+      <button id="bPoll" class="sm">Refresh</button>
     </div>
   </section>
 
-  <section class="card">
+  <div class="stage nomodel" id="sliceCard">
+    <section class="card vcard">
+      <div class="viewer" id="viewer">
+        <div class="empty" id="emptyOverlay">
+          <div>
+            <svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
+            <b>Drop an STL or 3MF here</b>
+            or tap to choose a model
+          </div>
+        </div>
+        <div class="vdims" id="dims"></div>
+        <button class="sm vfile" id="changeFile" hidden>Change model</button>
+        <div class="vtools" id="vtools" hidden>
+          <button class="sm" id="rotX">Rotate X</button>
+          <button class="sm" id="rotY">Rotate Y</button>
+          <button class="sm" id="rotZ">Rotate Z</button>
+          <input type="text" id="scalePct" value="100" inputmode="numeric" aria-label="Scale in percent">
+          <button class="sm" id="applyScale">Scale %</button>
+        </div>
+      </div>
+      <input type="file" id="sfile" accept=".stl,.3mf" hidden>
+      <div class="layerbox">
+        <label for="layerSlider"><span>Layer preview</span><b id="layerLabel">–</b></label>
+        <input type="range" id="layerSlider" min="1" max="100" value="100">
+      </div>
+    </section>
+
+    <section class="card panel">
+      <div class="sect">
+        <h2>Print settings</h2>
+        <div class="three">
+          <div><label for="material">Material</label>
+            <select id="material"><option>PLA</option><option>PETG</option><option>ABS</option><option>TPU</option></select></div>
+          <div><label for="layer">Layer</label>
+            <select id="layer"><option>0.08</option><option>0.12</option><option>0.16</option><option selected>0.20</option><option>0.24</option><option>0.28</option></select></div>
+          <div><label for="infill">Infill %</label>
+            <input type="text" id="infill" value="15" inputmode="numeric"></div>
+        </div>
+      </div>
+
+      <div class="sect needmodel-soft">
+        <h2>AMS filaments</h2>
+        <div class="slots" id="slotBox"></div>
+      </div>
+
+      <div class="sect needmodel">
+        <h2>Color changes</h2>
+        <div class="two">
+          <div><label for="baseSlot">Start with</label><select id="baseSlot"></select></div>
+          <div><label for="chgSlot">Switch to</label><select id="chgSlot"></select></div>
+        </div>
+        <button id="addChange" style="width:100%;margin-top:10px">Add change at the previewed layer</button>
+        <div id="changeList"></div>
+      </div>
+
+      <div class="sect">
+        <div class="cta">
+          <button class="big" id="bSlice">Slice</button>
+          <button class="big primary" id="bSlicePrint">Slice &amp; print</button>
+        </div>
+        <div class="sprog" id="sprog"><div id="sprogBar"></div></div>
+        <p class="meta" id="sstat"></p>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
     <h2>Files</h2>
-    <div class="drop" id="drop">Drop a .3mf here, or tap to choose
+    <div class="drop" id="drop">Drop a sliced .3mf here, or tap to choose
       <input type="file" id="file" accept=".3mf,.txt" hidden></div>
     <div id="files"><p class="meta">Loading…</p></div>
-    <div class="actions" style="margin-top:8px"><button id="bReload">Reload list</button></div>
-  </section>
-
-  <section class="card" id="sliceCard">
-    <h2>Slice a model</h2>
-    <p class="meta" style="margin-top:-6px">Choose an .stl or an unsliced .3mf. Preview it, pick AMS color changes by layer, and GitHub slices it for the A1.</p>
-    <div class="drop" id="sdrop"><span id="sname">Drop a model here, or tap to choose</span>
-      <input type="file" id="sfile" accept=".stl,.3mf" hidden></div>
-    <div id="vwrap" hidden>
-      <div class="viewer" id="viewer"></div>
-      <div class="actions" style="margin:8px 0">
-        <button id="rotX">Rotate X 90°</button>
-        <button id="rotY">Rotate Y 90°</button>
-        <button id="rotZ">Rotate Z 90°</button>
-        <input type="text" id="scalePct" value="100" style="width:64px" inputmode="numeric" aria-label="Scale in percent">
-        <button id="applyScale">Scale %</button>
-      </div>
-      <p class="meta" id="dims"></p>
-      <label for="layerSlider">Layer <b id="layerLabel"></b></label>
-      <input type="range" id="layerSlider" min="1" max="100" value="100">
-      <label>AMS slot colors (used for the preview)</label>
-      <div class="slots" id="slotBox"></div>
-      <div class="two">
-        <div><label for="baseSlot">First filament</label><select id="baseSlot"></select></div>
-        <div><label for="chgSlot">Change to</label>
-          <div class="row" style="gap:8px;flex-wrap:nowrap"><select id="chgSlot" style="flex:1"></select>
-            <button id="addChange">At this layer</button></div></div>
-      </div>
-      <div id="changeList"></div>
-    </div>
-    <div class="two" style="margin-top:12px">
-      <div><label for="material">Material</label>
-        <select id="material"><option>PLA</option><option>PETG</option><option>ABS</option><option>TPU</option></select></div>
-      <div><label for="layer">Layer height</label>
-        <select id="layer"><option>0.08</option><option>0.12</option><option>0.16</option><option selected>0.20</option><option>0.24</option><option>0.28</option></select></div>
-    </div>
-    <label for="infill">Infill (%)</label>
-    <input type="text" id="infill" value="15" inputmode="numeric" style="max-width:120px">
-    <div class="actions" style="margin-top:12px"><button class="primary" id="bSlice">Slice on GitHub</button></div>
-    <p class="meta" id="sstat" style="margin-bottom:0"></p>
+    <div class="actions" style="margin-top:10px"><button class="sm" id="bReload">Reload list</button></div>
   </section>
 
   <section class="card">
@@ -254,13 +346,13 @@ let renderer, scene, camera, controls, mesh, plane, uniforms, ready = false;
 function initScene() {
   if (ready) return;
   const host = $('#viewer');
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.localClippingEnabled = true;
   host.appendChild(renderer.domElement);
   scene = new THREE.Scene();
-  const bg = getComputedStyle(document.documentElement).getPropertyValue('--code').trim();
-  scene.background = new THREE.Color(bg || '#efefea');
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--viewbg').trim();
+  scene.background = null; renderer.setClearColor(0x000000, 0);
   camera = new THREE.PerspectiveCamera(40, 1, 1, 3000);
   camera.up.set(0, 0, 1);
   camera.position.set(0, -330, 260);
@@ -340,7 +432,7 @@ function rebuild(frame) {
   }
   const big = S.size.some(v => v > BED);
   $('#dims').innerHTML = S.size.map(v => v.toFixed(1)).join(' × ') + ' mm' +
-    (big ? ' <span class="warn">Too big for the A1 (256 mm). Scale it down.</span>' : '');
+    (big ? ' <span class="warn">· too big for the A1 (256 mm), scale it down</span>' : '');
   updateLayers();
   render();
 }
@@ -397,7 +489,7 @@ function renderList() {
   }
   for (const c of sorted) {
     const row = document.createElement('div'); row.className = 'chg';
-    row.innerHTML = '<span class="sw"></span><span class="grow"></span><button>Remove</button>';
+    row.innerHTML = '<span class="sw"></span><span class="grow"></span><button class="sm">Remove</button>';
     row.querySelector('.sw').style.background = hex(c.slot);
     row.querySelector('.grow').textContent = 'From ' + c.h.toFixed(2) + ' mm (layer ' + Math.round(c.h / S.layerH) + '): AMS slot ' + c.slot;
     row.querySelector('button').onclick = () => { S.changes = S.changes.filter(x => x !== c); renderList(); applyColors(); };
@@ -433,7 +525,7 @@ buildSlotUI();
 $('#baseSlot').onchange = () => { S.base = +$('#baseSlot').value; applyColors(); };
 $('#layerSlider').oninput = () => { S.layer = +$('#layerSlider').value; applyLayer(); };
 $('#addChange').onclick = () => {
-  if (S.layer <= 1) { alert('Pick a layer above the first one.'); return; }
+  if (S.layer <= 1) { $('#sstat').textContent = 'Move the layer slider above the first layer, then add the change.'; return; }
   const h = Math.round(S.layer * S.layerH * 100) / 100;
   S.changes = S.changes.filter(c => Math.abs(c.h - h) > 1e-6);
   S.changes.push({ h, slot: +$('#chgSlot').value });
@@ -447,6 +539,8 @@ $('#applyScale').onclick = () => {
   if (S.V && f > 0) { scaleBy(f); $('#scalePct').value = '100'; }
 };
 
+try { initScene(); } catch (e) { console.warn('3D viewer unavailable', e); }
+
 // ---------- public API ----------
 window.viewer = {
   async load(file) {
@@ -456,8 +550,9 @@ window.viewer = {
     else V = new Float32Array(new STLLoader().parse(buf).attributes.position.array);
     if (V.length / 9 > MAX_TRIS) throw new Error('the model has too many triangles (max 1.5 million)');
     if (V.length < 9) throw new Error('the model has no triangles');
-    $('#vwrap').hidden = false;
     initScene();
+    $('#sliceCard').classList.remove('nomodel');
+    $('#emptyOverlay').hidden = true; $('#vtools').hidden = false; $('#changeFile').hidden = false;
     S.V = V;
     S.changes = []; S.layer = 1e9;
     S.layerH = parseFloat($('#layer').value) || 0.2;
@@ -576,24 +671,26 @@ window.viewer = {
     }
   }
 
+  let lastFiles = [];
   function renderFiles(list) {
+    lastFiles = list;
     const box = $('#files');
     box.innerHTML = '';
     if (!list.length) { box.innerHTML = '<p class="meta">No files yet. Upload a .3mf above.</p>'; return; }
     for (const f of list) {
       const row = document.createElement('div');
-      row.className = 'row'; row.style.padding = '10px 0'; row.style.borderTop = '1px solid var(--line)';
+      row.className = 'frow';
       row.innerHTML = '<div class="grow"><div class="name"></div><div class="meta"></div></div><div class="actions"></div>';
       row.querySelector('.name').textContent = f.name;
       row.querySelector('.meta').textContent = fmt(f.size);
       const acts = row.querySelector('.actions');
       const is3mf = /\.3mf$/i.test(f.name);
       const up = document.createElement('button');
-      up.textContent = 'Upload only'; up.onclick = () => send(f.name, false);
+      up.className = 'sm'; up.textContent = 'Upload only'; up.onclick = () => send(f.name, false);
       acts.appendChild(up);
       if (is3mf) {
         const pr = document.createElement('button');
-        pr.className = 'primary'; pr.textContent = 'Upload & print'; pr.onclick = () => send(f.name, true);
+        pr.className = 'primary sm'; pr.textContent = 'Upload & print'; pr.onclick = () => send(f.name, true);
         acts.appendChild(pr);
       }
       box.appendChild(row);
@@ -625,7 +722,7 @@ window.viewer = {
   }
 
   // ---------- slicing (GitHub Actions) ----------
-  let sliceBase = '';
+  let sliceBase = '', lastState = '';
   async function pickModel(file) {
     if (!file) return;
     const st = $('#sstat');
@@ -635,23 +732,47 @@ window.viewer = {
       st.textContent = 'Loading ' + file.name + '…';
       await window.viewer.load(file);
       sliceBase = file.name.replace(/\.(stl|3mf)$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40) || 'model';
-      $('#sname').textContent = file.name + ' (' + fmt(file.size) + ')';
       st.textContent = '';
     } catch (e) { st.textContent = 'Could not read the model: ' + (e.message || e); }
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  async function runSlice() {
-    const st = $('#sstat'), btn = $('#bSlice');
+  function expectedNames() {
+    const mat = $('#material').value, p = window.viewer.changesParam();
+    const names = [];
+    if (p) {
+      const m = p.match(/^base=(\d+);(.*);slots=/);
+      let n = m ? +m[1] : 1;
+      if (m) m[2].split(';').forEach(x => { const s = +x.split(':')[1]; if (s > n) n = s; });
+      if (n > 1) names.push(`${sliceBase}_${mat}_AMS${n}.gcode.3mf`);
+    }
+    names.push(`${sliceBase}_${mat}.gcode.3mf`);
+    return names;
+  }
+  function progress(on, pct) {
+    $('#sprog').classList.toggle('on', on);
+    $('#sprogBar').style.width = (pct || 0) + '%';
+  }
+
+  async function runSlice(thenPrint) {
+    const st = $('#sstat'), b1 = $('#bSlice'), b2 = $('#bSlicePrint');
     if (!window.viewer || !window.viewer.hasModel()) { st.textContent = 'Choose a model first.'; return; }
     const infill = parseInt($('#infill').value, 10);
     if (!(infill >= 0 && infill <= 100)) { st.textContent = 'Infill must be 0 to 100.'; return; }
-    btn.disabled = true;
+    if (thenPrint) {
+      if (!client || !client.connected) { st.textContent = 'Not connected to the broker, so it cannot print. Check Settings.'; return; }
+      if (lastState === 'RUNNING' || lastState === 'PAUSE' || lastState === 'PREPARE') { st.textContent = 'The printer is busy (' + lastState + ').'; return; }
+      if (!confirm('Slice ' + sliceBase + ' and start printing it as soon as it is ready?\nMake sure the bed is clear and the right filament is loaded.')) return;
+    }
+    b1.disabled = b2.disabled = true;
+    const before = {}; lastFiles.forEach(f => { before[f.name] = f.sha; });
     try {
+      progress(true, 4);
       st.textContent = 'Uploading the model…';
       const file = new File([window.viewer.toStlBlob()], sliceBase + '.stl', { type: 'model/stl' });
       const name = await uploadToGithub(file, 'incoming');
       const t0 = Date.now() - 15000;
+      progress(true, 10);
       st.textContent = 'Starting the slicer…';
       const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/actions/workflows/slice.yml/dispatches`, {
         method: 'POST',
@@ -674,30 +795,38 @@ window.viewer = {
       if (!run) throw new Error('The slicing job did not start. Check the Actions tab on GitHub.');
       for (let i = 0; i < 200; i++) {
         const j = await gh('/actions/runs/' + run.id);
+        const secs = Math.round((Date.now() - new Date(run.created_at).getTime()) / 1000);
         if (j.status === 'completed') {
-          if (j.conclusion === 'success') {
-            st.textContent = 'Sliced. The file is in the list below.';
-            await loadFiles();
-          } else {
+          if (j.conclusion !== 'success') {
             st.innerHTML = '';
             const a = document.createElement('a'); a.href = j.html_url; a.target = '_blank'; a.rel = 'noopener';
-            a.textContent = 'Slicing failed. Open the log.';
-            st.appendChild(a);
+            a.textContent = 'Slicing failed. Open the log.'; a.className = 'warn';
+            st.appendChild(a); progress(false);
+            return;
           }
+          progress(true, 100);
+          await loadFiles();
+          const fresh = expectedNames().map(n => lastFiles.find(f => f.name === n)).find(f => f && before[f.name] !== f.sha);
+          if (!fresh) { st.textContent = 'Sliced, but the new file was not found in the list. Reload the list.'; progress(false); return; }
+          if (!thenPrint) { st.textContent = 'Sliced: ' + fresh.name + '. Press Upload & print in Files.'; progress(false); return; }
+          st.textContent = 'Sliced. Sending ' + fresh.name + ' to the printer…';
+          send(fresh.name, true, true);
+          progress(false);
           return;
         }
-        st.textContent = 'Slicing… ' + Math.round((Date.now() - new Date(run.created_at).getTime()) / 1000) + ' s (usually 1 to 3 minutes)';
+        progress(true, Math.min(92, 15 + secs * 0.5));
+        st.textContent = (thenPrint ? 'Slicing, then printing… ' : 'Slicing… ') + secs + ' s (usually 1 to 3 minutes)';
         await sleep(6000);
       }
-      st.textContent = 'Still running after 20 minutes. Check the Actions tab on GitHub.';
-    } catch (e) { st.textContent = (e.detail || e.message); }
-    finally { btn.disabled = false; }
+      st.textContent = 'Still running after 20 minutes. Check the Actions tab on GitHub.'; progress(false);
+    } catch (e) { st.textContent = (e.detail || e.message); progress(false); }
+    finally { b1.disabled = b2.disabled = false; }
   }
 
   // ---------- MQTT ----------
   function setStatusUI(s) {
     lastStatusAt = Date.now();
-    const state = s.state || 'UNKNOWN';
+    const state = s.state || 'UNKNOWN'; lastState = state;
     const el = $('#pState'); el.textContent = state; el.className = 'state ' + state;
     const pct = (s.pct >= 0 && state !== 'OFFLINE') ? s.pct : 0;
     $('#pBar').style.width = pct + '%';
@@ -737,9 +866,9 @@ window.viewer = {
     return true;
   }
 
-  function send(name, print) {
+  function send(name, print, skipConfirm) {
     if (!headSha) { say('File list not loaded yet.', true); return; }
-    if (print && !confirm('Start printing ' + name + ' now?\nMake sure the bed is clear and filament is loaded.')) return;
+    if (print && !skipConfirm && !confirm('Start printing ' + name + ' now?\nMake sure the bed is clear and filament is loaded.')) return;
     if (publish({ action: print ? 'print' : 'upload', name, url: rawUrl(headSha, name) }))
       say((print ? 'Sent print command for ' : 'Sent upload command for ') + name + '. Watch the status above.');
   }
@@ -764,13 +893,15 @@ window.viewer = {
   ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => handleFile(ev.dataTransfer.files[0]));
 
-  const sdrop = $('#sdrop'), sinput = $('#sfile');
-  sdrop.onclick = () => sinput.click();
+  const vw = $('#viewer'), sinput = $('#sfile');
+  $('#emptyOverlay').onclick = () => sinput.click();
+  $('#changeFile').onclick = () => sinput.click();
   sinput.onchange = () => { pickModel(sinput.files[0]); sinput.value = ''; };
-  ['dragenter', 'dragover'].forEach(e => sdrop.addEventListener(e, ev => { ev.preventDefault(); sdrop.classList.add('over'); }));
-  ['dragleave', 'drop'].forEach(e => sdrop.addEventListener(e, ev => { ev.preventDefault(); sdrop.classList.remove('over'); }));
-  sdrop.addEventListener('drop', ev => pickModel(ev.dataTransfer.files[0]));
-  $('#bSlice').onclick = runSlice;
+  ['dragenter', 'dragover'].forEach(e => vw.addEventListener(e, ev => { ev.preventDefault(); vw.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => vw.addEventListener(e, ev => { ev.preventDefault(); vw.classList.remove('over'); }));
+  vw.addEventListener('drop', ev => pickModel(ev.dataTransfer.files[0]));
+  $('#bSlice').onclick = () => runSlice(false);
+  $('#bSlicePrint').onclick = () => runSlice(true);
   $('#layer').onchange = () => { if (window.viewer) window.viewer.setLayerHeight(parseFloat($('#layer').value)); };
 
   loadCfg();
